@@ -52,3 +52,10 @@ websockets==15.0.1
 xxhash==3.5.0
 zstandard==0.23.0
 alembic==1.16.2
+bcrypt==4.0.1
+pydantic-settings # For managing settings
+arq # The async task queue
+python-jose[cryptography] # For JWT
+passlib[bcrypt] # For password hashing
+asyncpg
+pydantic[email]

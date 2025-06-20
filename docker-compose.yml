@@ -54,19 +54,19 @@ services:
       redis:
         condition: service_healthy
 
-  # orchestrator_service:
-  #   container_name: synapse_orchestrator
-  #   build:
-  #     context: ./backend/orchestrator_service
-  #     dockerfile: Dockerfile
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   networks:
-  #     - synapse_net
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
+  orchestrator_service:
+    container_name: synapse_orchestrator
+    build:
+      context: ./backend/orchestrator_service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - synapse_net
+    depends_on:
+      redis:
+        condition: service_healthy
 
   # execution_workers:
   #   container_name: synapse_workers
