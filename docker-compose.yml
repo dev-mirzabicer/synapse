@@ -43,6 +43,9 @@ services:
       - .env
     ports:
       - "8000:8000" # The only backend service exposed to the host
+    volumes:
+      - ./backend/api_gateway:/app
+      - ./backend/shared:/app/shared
     networks:
       - synapse_net
     depends_on:
@@ -51,33 +54,33 @@ services:
       redis:
         condition: service_healthy
 
-  orchestrator_service:
-    container_name: synapse_orchestrator
-    build:
-      context: ./backend/orchestrator_service
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - synapse_net
-    depends_on:
-      redis:
-        condition: service_healthy
+  # orchestrator_service:
+  #   container_name: synapse_orchestrator
+  #   build:
+  #     context: ./backend/orchestrator_service
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   networks:
+  #     - synapse_net
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
 
-  execution_workers:
-    container_name: synapse_workers
-    build:
-      context: ./backend/execution_workers
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - synapse_net
-    depends_on:
-      redis:
-        condition: service_healthy
+  # execution_workers:
+  #   container_name: synapse_workers
+  #   build:
+  #     context: ./backend/execution_workers
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   networks:
+  #     - synapse_net
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
 
 # ------------------ NETWORKS & VOLUMES ------------------
 networks:

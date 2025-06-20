@@ -21,9 +21,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy the application code from the new context
-COPY ./api_gateway/app /app
-COPY ./api_gateway/alembic /app/alembic
-COPY ./api_gateway/alembic.ini /app/alembic.ini
+COPY ./api_gateway /app
 COPY ./shared /app/shared
 
 # Set the path to include the venv
