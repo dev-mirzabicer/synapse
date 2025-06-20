@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # ------------------ INFRASTRUCTURE ------------------
+  postgres:
+    image: postgres:16-alpine # Using a lightweight Alpine image
+    container_name: synapse_postgres
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persist data using a named volume
+    env_file:
+      - .env # Load environment variables from .env file
+    networks:
+      - synapse_net
+    ports:
+      - "5432:5432" # Expose port for local debugging/inspection if needed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: synapse_redis
+    restart: unless-stopped
+    networks:
+      - synapse_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------ BACKEND SERVICES ------------------
+  api_gateway:
+    container_name: synapse_api_gateway
+    build:
+      context: ./backend
+      dockerfile: api_gateway/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000" # The only backend service exposed to the host
+    networks:
+      - synapse_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  orchestrator_service:
+    container_name: synapse_orchestrator
+    build:
+      context: ./backend/orchestrator_service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - synapse_net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  execution_workers:
+    container_name: synapse_workers
+    build:
+      context: ./backend/execution_workers
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - synapse_net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+# ------------------ NETWORKS & VOLUMES ------------------
+networks:
+  synapse_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
