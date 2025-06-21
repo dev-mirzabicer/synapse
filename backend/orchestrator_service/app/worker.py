@@ -33,7 +33,7 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str, mes
         "group_id": group_id,
         "group_members": members,
         "turn_count": 0,
-        "last_saved_index": 1,
+        "last_saved_index": 0,
         "turn_id": turn_id,
     }
     # The graph will run, dispatch a job, and then pause.

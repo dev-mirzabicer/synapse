@@ -8,7 +8,7 @@ from app.core.arq_client import get_arq_pool
 from app.core.security import get_current_user
 import structlog
 from shared.app.db import get_db_session
-from shared.app.schemas.chat import GroupCreate, GroupRead
+from shared.app.schemas.groups import GroupCreate, GroupRead
 from shared.app.agents.prompts import ORCHESTRATOR_PROMPT, AGENT_BASE_PROMPT
 from shared.app.models.chat import ChatGroup, GroupMember, User, Message
 from shared.app.schemas.chat import MessageCreate, MessageRead
