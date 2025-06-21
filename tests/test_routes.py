@@ -111,7 +111,13 @@ def test_create_group(monkeypatch, client):
     app.dependency_overrides[groups_router.get_db_session] = override_db
     app.dependency_overrides[groups_router.get_current_user] = lambda: user
     app.dependency_overrides[groups_router.get_arq_pool] = lambda: types.SimpleNamespace(enqueue_job=lambda *a, **kw: None)
-    resp = client.post("/groups/", json={"name": "g"})
+    payload = {
+        "name": "g",
+        "members": [
+            {"alias": "Researcher", "role_prompt": "Do research"}
+        ],
+    }
+    resp = client.post("/groups/", json=payload)
     assert resp.status_code == 201
     assert session.committed
     app.dependency_overrides = {}
