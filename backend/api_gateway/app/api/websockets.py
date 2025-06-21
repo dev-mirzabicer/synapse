@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, Depends, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, HTTPException, Depends, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -43,9 +43,9 @@ manager = ConnectionManager()
 async def redis_listener(redis: Redis, group_id: str):
     """Listens to a Redis channel and broadcasts messages."""
     channel = f"group:{group_id}"
-    pubsub = redis.pubsub()
-    await pubsub.subscribe(channel)
     try:
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(channel)
         while True:
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True, timeout=1.0
@@ -57,6 +57,9 @@ async def redis_listener(redis: Redis, group_id: str):
             await asyncio.sleep(0.01)  # Prevent busy-waiting
     except asyncio.CancelledError:
         await pubsub.unsubscribe(channel)
+    except Exception as e:
+        await pubsub.unsubscribe(channel)
+        raise HTTPException(status_code=500, detail=f"Redis listener error: {e}")
 
 
 @router.websocket("/ws/{group_id}")
@@ -90,7 +93,10 @@ async def websocket_endpoint(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-    await manager.connect(websocket, group_id)
+    try:
+        await manager.connect(websocket, group_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to establish WebSocket: {e}")
     listener_task = asyncio.create_task(redis_listener(redis, group_id))
     logger.info("%s connected to group %s", current_user.email, group_id)
 

@@ -25,7 +25,15 @@ class WorkerSettings:
     functions = [start_turn, continue_turn]
 
     async def on_startup(self, ctx):
-        ctx["redis"] = await create_pool()
+        global _arq_pool
+        try:
+            _arq_pool = await create_pool()
+            ctx['redis'] = _arq_pool
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to Redis: {e}")
 
     async def on_shutdown(self, ctx):
-        await ctx["redis"].close()
+        try:
+            await ctx['redis'].close()
+        except Exception as e:
+            raise RuntimeError(f"Error closing Redis connection: {e}")
