@@ -6,3 +6,4 @@ pydantic-settings
 arq
 langchain
 langgraph
+structlog

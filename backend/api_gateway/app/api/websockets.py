@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, HTTPException, Depends, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -11,7 +11,7 @@ from shared.app.models.chat import ChatGroup, User
 
 router = APIRouter()
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ConnectionManager:
@@ -98,13 +98,13 @@ async def websocket_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to establish WebSocket: {e}")
     listener_task = asyncio.create_task(redis_listener(redis, group_id))
-    logger.info("%s connected to group %s", current_user.email, group_id)
+    logger.info("websocket.connected", user=current_user.email, group_id=group_id)
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        logger.info("WebSocket disconnect for user %s", current_user.email)
+        logger.info("websocket.disconnected", user=current_user.email)
     finally:
         listener_task.cancel()
         manager.disconnect(websocket, group_id)

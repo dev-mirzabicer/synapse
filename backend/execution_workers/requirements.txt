@@ -5,6 +5,7 @@ langchain-openai
 langgraph
 tavily-python
 redis
+structlog
 # We need access to our shared models and schemas
 sqlalchemy
 asyncpg

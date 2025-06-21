@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
 
+    # --- Logging ---
+    LOG_LEVEL: str = "INFO"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')
 
 # Create a single, importable instance of the settings
