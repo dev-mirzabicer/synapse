@@ -8,7 +8,7 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install dependencies
+# Install dependencies - path is relative to the 'backend' context
 COPY api_gateway/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -20,9 +20,10 @@ WORKDIR /app
 # Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy the application code from the new context
-COPY ./api_gateway /app
-COPY ./shared /app/shared
+# Copy the application code. Paths are relative to the 'backend' context.
+# The trailing slash copies the *contents* of the directory.
+COPY ./api_gateway/ /app
+COPY ./shared/ /app/shared
 
 # Set the path to include the venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -31,6 +32,5 @@ ENV PATH="/opt/venv/bin:$PATH"
 EXPOSE 8000
 
 # Command to run the application using Uvicorn
-# --host 0.0.0.0 makes it accessible from other containers
-# --reload is great for development, can be removed for production builds
+# This correctly finds /app/app/main.py
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
