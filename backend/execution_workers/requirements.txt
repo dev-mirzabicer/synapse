@@ -2,6 +2,8 @@ arq
 pydantic-settings
 langchain
 langchain-openai
+langchain-google-genai
+langchain-anthropic
 langgraph
 tavily-python
 redis

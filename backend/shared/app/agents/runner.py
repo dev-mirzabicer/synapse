@@ -1,5 +1,7 @@
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 from .tools import TOOL_REGISTRY
 from ..schemas.groups import GroupMemberRead
 from ..core.config import settings
@@ -16,11 +18,31 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
         prompt_template = member_config.system_prompt + f"\n\nAvailable team members for delegation: {available_aliases}."
 
         prompt = [SystemMessage(content=prompt_template), *messages]
-        llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0.1,
-            openai_api_key=settings.OPENAI_API_KEY,
-        )
+
+        provider = getattr(member_config, "provider", "openai")
+        model = getattr(member_config, "model", "gpt-4o")
+        temperature = getattr(member_config, "temperature", 0.1)
+
+        if provider == "openai":
+            llm = ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                openai_api_key=settings.OPENAI_API_KEY,
+            )
+        elif provider == "gemini":
+            llm = ChatGoogleGenerativeAI(
+                model=model,
+                temperature=temperature,
+                google_api_key=settings.GEMINI_API_KEY,
+            )
+        elif provider == "claude":
+            llm = ChatAnthropic(
+                model=model,
+                temperature=temperature,
+                anthropic_api_key=settings.CLAUDE_API_KEY,
+            )
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
 
         allowed_tools = [TOOL_REGISTRY[tool_name] for tool_name in member_config.tools or []]
         llm_with_tools = llm.bind_tools(allowed_tools) if allowed_tools else llm

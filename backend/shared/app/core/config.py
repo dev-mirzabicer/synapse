@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # --- LLM Provider Settings ---
     # API keys for external services
     OPENAI_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
+    CLAUDE_API_KEY: str | None = None
     TAVILY_API_KEY: str | None = None
 
     # --- Logging ---

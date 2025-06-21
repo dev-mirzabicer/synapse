@@ -18,6 +18,9 @@ class GroupMember(Base):
     alias: Mapped[str] = mapped_column(String(100))
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     tools: Mapped[list[str] | None] = mapped_column(JSON)
+    provider: Mapped[str] = mapped_column(String(50), default="openai")
+    model: Mapped[str] = mapped_column(String(100), default="gpt-4o")
+    temperature: Mapped[float] = mapped_column(default=0.1)
 
     group: Mapped["ChatGroup"] = relationship(back_populates="members")
 
