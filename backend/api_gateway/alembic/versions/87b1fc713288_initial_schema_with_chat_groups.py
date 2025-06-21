@@ -1,8 +1,8 @@
 """Initial schema with chat groups
 
-Revision ID: bf5e249d927f
+Revision ID: 87b1fc713288
 Revises: 
-Create Date: 2025-06-21 11:54:44.916077
+Create Date: 2025-06-21 18:07:16.564318
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'bf5e249d927f'
+revision: str = '87b1fc713288'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -44,6 +44,9 @@ def upgrade() -> None:
     sa.Column('alias', sa.String(length=100), nullable=False),
     sa.Column('system_prompt', sa.Text(), nullable=False),
     sa.Column('tools', sa.JSON(), nullable=True),
+    sa.Column('provider', sa.String(length=50), nullable=False),
+    sa.Column('model', sa.String(length=100), nullable=False),
+    sa.Column('temperature', sa.Float(), nullable=False),
     sa.ForeignKeyConstraint(['group_id'], ['chat_groups.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
