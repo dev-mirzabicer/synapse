@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, func, ForeignKey, JSON
+from sqlalchemy import String, DateTime, func, ForeignKey, JSON, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
@@ -16,7 +16,8 @@ class GroupMember(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_groups.id"), index=True)
     alias: Mapped[str] = mapped_column(String(100))
-    # TODO (Phase 2): Add template_id Foreign Key
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    tools: Mapped[list[str] | None] = mapped_column(JSON)
 
     group: Mapped["ChatGroup"] = relationship(back_populates="members")
 
