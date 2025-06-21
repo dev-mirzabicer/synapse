@@ -65,9 +65,10 @@ async def send_message(
 
     # Enqueue the job for the orchestrator to process
     await arq_pool.enqueue_job(
-        "process_turn", # This is the function name in the worker
+        "process_new_message", # Let's rename the task for clarity
         group_id=str(group_id),
-        turn_id=str(turn_id)
+        message_content=message_in.content,
+        user_id=str(current_user.id) # Pass user context if needed later
     )
 
     return user_message
