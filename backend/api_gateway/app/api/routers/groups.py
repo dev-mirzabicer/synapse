@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,20 +129,25 @@ async def send_message(
             raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     # Enqueue the job for the orchestrator to process
-    try:
-        # Job details from 'main' branch
-        await arq_pool.enqueue_job(
-            "start_turn",
-            group_id=str(group_id),
-            message_content=message_in.content,
-            user_id=str(current_user.id),
-            message_id=str(user_message.id),
-            turn_id=str(turn_id),
-        )
-        logger.info("send_message.enqueued", group_id=str(group_id))
-    # Error handling from 'refactor' branch
-    except Exception as e:
-        logger.error("send_message.enqueue_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to enqueue job: {e}")
+    for attempt in range(3):
+        try:
+            await arq_pool.enqueue_job(
+                "start_turn",
+                group_id=str(group_id),
+                message_content=message_in.content,
+                user_id=str(current_user.id),
+                message_id=str(user_message.id),
+                turn_id=str(turn_id),
+            )
+            logger.info("send_message.enqueued", group_id=str(group_id))
+            break
+        except Exception as e:
+            if attempt == 2:
+                logger.error("send_message.enqueue_failed", error=str(e))
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to enqueue job after retries: {e}",
+                )
+            await asyncio.sleep(1)
 
     return user_message
