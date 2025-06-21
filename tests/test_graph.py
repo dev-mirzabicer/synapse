@@ -45,7 +45,7 @@ async def test_graph_basic_flow(monkeypatch):
     monkeypatch.setattr(runner, "run_agent", fake_run_agent)
 
     state = {
-        "messages": [HumanMessage(content="hi")],
+        "messages": [SystemMessage(content="TASK_COMPLETE", name="Orchestrator")],
         "group_id": "gid",
         "group_members": [GroupMemberRead(id=uuid.uuid4(), alias="Orchestrator", system_prompt="s")],
         "next_actors": [],

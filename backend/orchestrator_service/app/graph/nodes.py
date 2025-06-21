@@ -1,5 +1,6 @@
 import json
 import uuid
+import inspect
 from redis.asyncio import Redis
 from .state import GraphState
 from shared.app.utils.message_serde import serialize_messages
@@ -12,6 +13,9 @@ from shared.app.core.logging import setup_logging
 
 setup_logging()
 logger = structlog.get_logger(__name__)
+
+
+from .checkpoint import checkpoint as graph_checkpoint
 
 
 async def _persist_new_messages(state: GraphState, config: dict) -> None:
@@ -46,7 +50,8 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
         finally:
             await redis.close()
 
-    await config["checkpoint"].update_state(
+    cp = config.get("checkpoint", graph_checkpoint)
+    await cp.update_state(
         config,
         {"last_saved_index": last_saved + len(new_messages)},
     )
@@ -54,7 +59,7 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
 
 async def dispatch_node(state: GraphState, config: dict) -> dict:
     """Persist new messages and dispatch jobs based on the last message."""
-    arq_pool = config["arq_pool"]
+    arq_pool = config.get("arq_pool") or config["metadata"].get("arq_pool")
     thread_id = config["configurable"]["thread_id"]
 
     await _persist_new_messages(state, config)
@@ -93,7 +98,14 @@ async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     thread_id = config["configurable"]["thread_id"]
     logger.info("sync_to_postgres.start", thread_id=thread_id)
 
-    full_state = await config["checkpoint"].get(config)
+    cp = config.get("checkpoint", graph_checkpoint)
+    full_state = state
+    get_func = getattr(cp, "aget", None) or getattr(cp, "get", None)
+    if get_func:
+        if inspect.iscoroutinefunction(get_func):
+            full_state = await get_func(config)
+        else:
+            full_state = get_func(config)
     await _persist_new_messages(full_state, config)
 
     logger.info("sync_to_postgres.complete", thread_id=thread_id)
