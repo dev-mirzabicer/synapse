@@ -140,6 +140,8 @@ To apply migrations to the database:
 docker-compose exec api_gateway alembic upgrade head
 ```
 
+...or you can simply run `bash docker.sh` to run all.
+
 ## 5. Core Concepts & Workflow
 
 ### The Decoupled Execution Loop
@@ -162,10 +164,7 @@ The system is designed around a robust, asynchronous loop that ensures scalabili
 
 ## 6. API Endpoints
 
-The primary API endpoints are exposed by the `api_gateway` service. Please refer to the live Swagger UI documentation for detailed request/response models:
-
-*   **Swagger UI**: `http://localhost:8000/docs`
-*   **ReDoc**: `http://localhost:8000/redoc`
+The primary API endpoints are exposed by the `api_gateway` service.
 
 ## 7. Testing
 
