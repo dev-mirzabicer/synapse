@@ -46,8 +46,10 @@ async def test_start_turn(monkeypatch):
     monkeypatch.setattr(orch_worker.graph_app, 'ainvoke', fake_ainvoke)
     orch_worker._arq_pool = 'pool'
     monkeypatch.setattr(orch_worker, 'AsyncSessionLocal', lambda: DummyAsyncSession())
-    await orch_worker.start_turn({}, 'gid', 'hi', 'uid')
+    await orch_worker.start_turn({}, 'gid', 'hi', 'uid', 'mid', 'tid')
     assert called['input']['messages'][0].content == 'hi'
+    assert called['input']['turn_id'] == 'tid'
+    assert called['input']['last_saved_index'] == 1
     assert called['config']['arq_pool'] == 'pool'
 
 @pytest.mark.asyncio

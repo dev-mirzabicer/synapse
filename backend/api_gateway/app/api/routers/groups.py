@@ -89,22 +89,14 @@ async def send_message(
     logger.info("send_message.start", group_id=str(group_id))
     async with db() as session:
         try:
-            # Logic from 'main': Validate group, ownership, and membership
-            try:
-                group = await session.get(ChatGroup, group_id)
-            except AttributeError:
-                group = None
+            result = await session.execute(
+                select(ChatGroup).where(
+                    ChatGroup.id == group_id,
+                    ChatGroup.owner_id == current_user.id,
+                )
+            )
+            group = result.scalars().first()
             if not group:
-                try:
-                    result = await session.execute(
-                        select(ChatGroup).where(ChatGroup.id == group_id)
-                    )
-                    group = result.scalars().first()
-                except Exception:
-                    group = None
-            if group is None:
-                group = ChatGroup(id=group_id, owner_id=current_user.id)
-            elif getattr(group, "owner_id", current_user.id) != current_user.id:
                 raise HTTPException(status_code=404, detail="Group not found")
 
 
@@ -143,6 +135,8 @@ async def send_message(
             group_id=str(group_id),
             message_content=message_in.content,
             user_id=str(current_user.id),
+            message_id=str(user_message.id),
+            turn_id=str(turn_id),
         )
         logger.info("send_message.enqueued", group_id=str(group_id))
     # Error handling from 'refactor' branch

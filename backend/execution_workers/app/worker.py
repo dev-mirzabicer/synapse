@@ -1,4 +1,5 @@
 from arq import ArqRedis, create_pool
+import uuid
 from langgraph.checkpoint.redis import RedisSaver
 from langchain_core.messages import ToolMessage, SystemMessage
 import structlog
@@ -37,6 +38,7 @@ async def run_tool(
     message = ToolMessage(
         content=str(result), name=tool_name, tool_call_id=tool_call_id
     )
+    message.id = str(uuid.uuid4())
 
     await checkpoint.update_state(
         {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
@@ -56,6 +58,7 @@ async def run_agent_llm(
     group_members = [GroupMemberRead.model_validate(gm) for gm in group_members_dict]
 
     response = await run_agent(messages, group_members, alias)
+    response.id = str(uuid.uuid4())
 
     await checkpoint.update_state(
         {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
