@@ -45,7 +45,12 @@ class Message(Base):
     turn_id: Mapped[uuid.UUID] = mapped_column(index=True)
     sender_alias: Mapped[str] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(String)
-    parent_message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id"))
+    # Optional pointer to another message to support threaded conversations.
+    # Not currently used by the orchestration loop but reserved for future
+    # features like message trees or reply chains.
+    parent_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id")
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=func.now(), index=True)
     meta: Mapped[dict | None] = mapped_column(JSON)
 

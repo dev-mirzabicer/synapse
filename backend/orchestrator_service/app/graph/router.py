@@ -12,6 +12,12 @@ def router_function(state: GraphState) -> str:
     last_message = state['messages'][-1]
     sender_name = getattr(last_message, 'name', 'system')
 
+    # If an agent reported a failure, route back to the orchestrator so it can
+    # decide how to handle the error.
+    if sender_name == "system_error":
+        state['next_actors'] = ["Orchestrator"]
+        return "dispatch_agents"
+
     if "TASK_COMPLETE" in last_message.content and sender_name == "Orchestrator":
         return "sync_to_postgres"
 

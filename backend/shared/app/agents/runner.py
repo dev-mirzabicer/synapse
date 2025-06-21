@@ -1,7 +1,4 @@
 from langchain_core.messages import BaseMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_anthropic import ChatAnthropic
 from .tools import TOOL_REGISTRY
 from ..schemas.groups import GroupMemberRead
 from ..core.config import settings
@@ -24,18 +21,24 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
         temperature = getattr(member_config, "temperature", 0.1)
 
         if provider == "openai":
+            from langchain_openai import ChatOpenAI
+
             llm = ChatOpenAI(
                 model=model,
                 temperature=temperature,
                 openai_api_key=settings.OPENAI_API_KEY,
             )
         elif provider == "gemini":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
             llm = ChatGoogleGenerativeAI(
                 model=model,
                 temperature=temperature,
                 google_api_key=settings.GEMINI_API_KEY,
             )
         elif provider == "claude":
+            from langchain_anthropic import ChatAnthropic
+
             llm = ChatAnthropic(
                 model=model,
                 temperature=temperature,
