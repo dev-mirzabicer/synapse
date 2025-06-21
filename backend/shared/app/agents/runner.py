@@ -2,6 +2,7 @@ from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from .tools import TOOL_REGISTRY
 from ..schemas.groups import GroupMemberRead
+from ..core.config import settings
 
 async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead], alias: str) -> BaseMessage:
     """Encapsulates the logic for running a single agent's LLM call."""
@@ -15,7 +16,11 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
         prompt_template = member_config.system_prompt + f"\n\nAvailable team members for delegation: {available_aliases}."
 
         prompt = [SystemMessage(content=prompt_template), *messages]
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
+        llm = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0.1,
+            openai_api_key=settings.OPENAI_API_KEY,
+        )
 
         allowed_tools = [TOOL_REGISTRY[tool_name] for tool_name in member_config.tools or []]
         llm_with_tools = llm.bind_tools(allowed_tools) if allowed_tools else llm

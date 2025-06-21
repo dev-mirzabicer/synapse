@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     REDIS_URL: str
 
     # --- LLM Provider Settings ---
-    # TODO (Phase 2): Add specific LLM API keys
+    # API keys for external services
     OPENAI_API_KEY: str | None = None
+    TAVILY_API_KEY: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')
 

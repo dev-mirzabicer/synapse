@@ -98,11 +98,12 @@ State persistence is handled through a dual-database approach:
 ### Configuration
 
 1.  Navigate to the root of the `synapse` repository.
-2.  Copy the example environment file: `cp .env.example .env`.
+2.  Copy the example environment file: `cp backend/.env.example .env`.
 3.  Open the `.env` file and fill in the required secrets:
     *   `SECRET_KEY`: A strong, random key for JWT signing. You can generate one with `openssl rand -hex 32`.
     *   `OPENAI_API_KEY`: Your API key for OpenAI.
     *   `TAVILY_API_KEY`: Your API key for the Tavily search service.
+    *   Database and Redis settings are pre-populated for local development.
 
 ### Running the Stack
 

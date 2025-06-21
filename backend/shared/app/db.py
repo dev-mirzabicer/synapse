@@ -1,9 +1,10 @@
-import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 from collections.abc import AsyncGenerator
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+from .core.config import settings
+
+DATABASE_URL = settings.DATABASE_URL
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
 
@@ -16,4 +17,3 @@ except SQLAlchemyError as e:
 async def get_db_session() -> AsyncGenerator[async_sessionmaker, None]:
     """Dependency to get a DB session."""
     yield AsyncSessionLocal
-
