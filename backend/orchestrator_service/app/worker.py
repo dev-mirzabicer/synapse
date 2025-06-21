@@ -8,6 +8,8 @@ from shared.app.core.logging import setup_logging
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+_arq_pool: ArqRedis | None = None
+
 
 async def start_turn(ctx, group_id: str, message_content: str, user_id: str):
     """Starts a new turn initiated by a user."""
@@ -15,7 +17,9 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str):
     config = {"configurable": {"thread_id": group_id}}
     graph_input = {"messages": [HumanMessage(content=message_content)]}
     # The graph will run, dispatch a job, and then pause.
-    arq_pool: ArqRedis = ctx["redis"]
+    arq_pool: ArqRedis | None = ctx.get("redis", _arq_pool)
+    if arq_pool is None:
+        raise KeyError("redis")
     await graph_app.ainvoke(graph_input, config={"arq_pool": arq_pool, **config})
 
 
@@ -24,7 +28,9 @@ async def continue_turn(ctx, thread_id: str):
     logger.info("continue_turn", thread_id=thread_id)
     config = {"configurable": {"thread_id": thread_id}}
     # We invoke with empty input, as the graph will load the new state from the checkpointer.
-    arq_pool: ArqRedis = ctx["redis"]
+    arq_pool: ArqRedis | None = ctx.get("redis", _arq_pool)
+    if arq_pool is None:
+        raise KeyError("redis")
     await graph_app.ainvoke(None, config={"arq_pool": arq_pool, **config})
 
 
