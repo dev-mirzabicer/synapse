@@ -15,6 +15,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 import shared.app.schemas.groups as _groups
 import shared.app.schemas.chat as _chat
+from shared.app.models.chat import ChatGroup
 _chat.GroupCreate = _groups.GroupCreate
 _chat.GroupRead = _groups.GroupRead
 
@@ -124,7 +125,10 @@ def test_create_group(monkeypatch, client):
 
 def test_send_message(monkeypatch, client):
     user = types.SimpleNamespace(id=uuid.uuid4())
-    session = FakeSession()
+    gid = uuid.uuid4()
+    # Provide an existing group owned by the user
+    fake_group = ChatGroup(id=gid, owner_id=user.id, name="g")
+    session = FakeSession(FakeExecuteResult(fake_group))
     calls = {}
     class FakePool:
         async def enqueue_job(self, *a, **kw):
@@ -133,7 +137,6 @@ def test_send_message(monkeypatch, client):
     app.dependency_overrides[groups_router.get_db_session] = override_db
     app.dependency_overrides[groups_router.get_current_user] = lambda: user
     app.dependency_overrides[groups_router.get_arq_pool] = lambda: FakePool()
-    gid = uuid.uuid4()
     resp = client.post(f"/groups/{gid}/messages", json={"content": "hi"})
     assert resp.status_code == 202
     assert calls.get('called')
