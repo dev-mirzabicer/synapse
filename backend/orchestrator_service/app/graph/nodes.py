@@ -3,6 +3,11 @@ from shared.app.utils.message_serde import serialize_messages
 from shared.app.db import AsyncSessionLocal
 from shared.app.models.chat import Message
 from sqlalchemy.dialects.postgresql import insert
+import structlog
+from shared.app.core.logging import setup_logging
+
+setup_logging()
+logger = structlog.get_logger(__name__)
 
 
 async def dispatch_node(state: GraphState, config: dict) -> dict:
@@ -15,6 +20,7 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
         messages_dict = serialize_messages(state["messages"])
         group_members_dict = [gm.dict() for gm in state["group_members"]]
         for call in tool_calls:
+            logger.info("dispatch.tool", tool=call["name"], thread_id=thread_id)
             await arq_pool.enqueue_job(
                 "run_tool",
                 tool_name=call["name"],
@@ -26,6 +32,7 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
         messages_dict = serialize_messages(state["messages"])
         group_members_dict = [gm.dict() for gm in state["group_members"]]
         for alias in next_actors:
+            logger.info("dispatch.agent", alias=alias, thread_id=thread_id)
             await arq_pool.enqueue_job(
                 "run_agent_llm",
                 alias=alias,
@@ -39,7 +46,7 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
 async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     """Saves the final, complete conversation history to PostgreSQL."""
     thread_id = config["configurable"]["thread_id"]
-    print(f"Syncing conversation {thread_id} to PostgreSQL.")
+    logger.info("sync_to_postgres.start", thread_id=thread_id)
 
     full_state = await config["checkpoint"].get(config)
     messages_to_save = full_state["messages"]
@@ -64,5 +71,5 @@ async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
             )  # Idempotent insert
             await session.execute(stmt)
         await session.commit()
-    print(f"Sync complete for conversation {thread_id}.")
+    logger.info("sync_to_postgres.complete", thread_id=thread_id)
     return {}

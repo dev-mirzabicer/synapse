@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from shared.app.db import get_db_session
 from shared.app.schemas.auth import UserCreate, Token
@@ -9,9 +10,11 @@ from shared.app.models.chat import User
 from app.core.security import get_password_hash, verify_password, create_access_token
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db_session)):
+    logger.info("register_user.start", email=user_in.email)
     async with db() as session:
         try:
             result = await session.execute(select(User).where(User.email == user_in.email))
@@ -22,8 +25,13 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db_s
             user = User(email=user_in.email, hashed_password=hashed_password)
             session.add(user)
             await session.commit()
+            logger.info("register_user.success", user_id=str(user.id))
         except Exception as e:
-            await session.rollback()
+            if hasattr(session, "rollback"):
+                await session.rollback()
+            if isinstance(e, HTTPException):
+                raise
+            logger.error("register_user.error", error=str(e))
             raise HTTPException(status_code=500, detail=f"Database error: {e}")
     return {"message": "User created successfully"}
 
@@ -32,11 +40,13 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db_session)
 ):
+    logger.info("login.start", username=form_data.username)
     async with db() as session:
         try:
             result = await session.execute(select(User).where(User.email == form_data.username))
             user = result.scalars().first()
         except Exception as e:
+            logger.error("login.error", error=str(e))
             raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -47,4 +57,5 @@ async def login_for_access_token(
         )
 
     access_token = create_access_token(data={"sub": str(user.id)})
+    logger.info("login.success", user_id=str(user.id))
     return {"access_token": access_token, "token_type": "bearer"}
