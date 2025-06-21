@@ -2,8 +2,9 @@ from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
+from fastapi.exceptions import WebSocketException
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import select
 
 from shared.app.core.config import settings
@@ -46,6 +47,28 @@ async def get_current_user(
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    async with db() as session:
+        user = await session.get(User, user_id)
+        if user is None:
+            raise credentials_exception
+        return user
+
+
+async def get_user_from_token(token: str, db: async_sessionmaker) -> User:
+    """Validate a raw JWT and return the associated ``User``.
+
+    Raises ``WebSocketException`` on any validation error. This helper is used
+    for WebSocket authentication where dependency injection isn't available.
+    """
+    credentials_exception = WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id: str | None = payload.get("sub")
+        if not user_id:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
