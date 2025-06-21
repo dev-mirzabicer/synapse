@@ -36,6 +36,7 @@ async def test_start_turn(monkeypatch):
     orch_worker._arq_pool = 'pool'
     await orch_worker.start_turn({}, 'gid', 'hi', 'uid')
     assert called['input']['messages'][0].content == 'hi'
+    assert called['config']['arq_pool'] == 'pool'
 
 @pytest.mark.asyncio
 async def test_continue_turn(monkeypatch):
@@ -47,6 +48,7 @@ async def test_continue_turn(monkeypatch):
     orch_worker._arq_pool = 'pool'
     await orch_worker.continue_turn({}, 'tid')
     assert called['config']['configurable']['thread_id'] == 'tid'
+    assert called['config']['arq_pool'] == 'pool'
 
 class DummyRedis:
     def __init__(self):
