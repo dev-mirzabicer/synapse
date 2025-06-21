@@ -3,11 +3,12 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from redis.asyncio import Redis
 
-from app.core.arq_client import get_arq_pool # Re-using the pool for Redis connection
-from app.core.security import get_current_user # We can also secure websockets
+from app.core.arq_client import get_arq_pool  # Re-using the pool for Redis connection
+from app.core.security import get_current_user  # We can also secure websockets
 from shared.app.models.chat import User
 
 router = APIRouter()
+
 
 class ConnectionManager:
     def __init__(self):
@@ -28,7 +29,9 @@ class ConnectionManager:
             for connection in self.active_connections[group_id]:
                 await connection.send_text(message)
 
+
 manager = ConnectionManager()
+
 
 async def redis_listener(redis: Redis, group_id: str):
     """Listens to a Redis channel and broadcasts messages."""
@@ -37,10 +40,14 @@ async def redis_listener(redis: Redis, group_id: str):
     await pubsub.subscribe(channel)
     try:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=1.0
+            )
             if message:
-                await manager.broadcast_to_group(group_id, message['data'].decode('utf-8'))
-            await asyncio.sleep(0.01) # Prevent busy-waiting
+                await manager.broadcast_to_group(
+                    group_id, message["data"].decode("utf-8")
+                )
+            await asyncio.sleep(0.01)  # Prevent busy-waiting
     except asyncio.CancelledError:
         await pubsub.unsubscribe(channel)
 
@@ -50,7 +57,7 @@ async def websocket_endpoint(
     websocket: WebSocket,
     group_id: str,
     # current_user: User = Depends(get_current_user) # TODO: Figure out WS authentication
-    redis: Redis = Depends(get_arq_pool)
+    redis: Redis = Depends(get_arq_pool),
 ):
     # TODO (Phase 4): Implement robust WebSocket authentication.
     # This is tricky as headers are not sent per message.
