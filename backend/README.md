@@ -171,4 +171,25 @@ The primary API endpoints are exposed by the `api_gateway` service.
 
 ## 7. Testing
 
-*TODO: This section will be updated with instructions on how to run the test suite. We will use `pytest` for unit and integration tests. Tests will be run automatically in our CI/CD pipeline.*
+The `tests/` directory contains unit tests for the various services. They can be
+run locally with **pytest**.
+
+### Running the Test Suite
+
+1. Install the development requirements as well as each service's dependencies:
+
+   ```bash
+   python -m pip install -r requirements.dev.txt
+   python -m pip install -r backend/api_gateway/requirements.txt
+   python -m pip install -r backend/orchestrator_service/requirements.txt
+   python -m pip install -r backend/execution_workers/requirements.txt
+   ```
+
+2. From the repository root, execute:
+
+   ```bash
+   pytest
+   ```
+
+The tests are also executed automatically for every pull request via the
+GitHub Actions workflow in `.github/workflows/python-tests.yml`.
