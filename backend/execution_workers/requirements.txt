@@ -1,0 +1,10 @@
+arq
+pydantic-settings
+langchain
+langchain-openai
+langgraph
+tavily-python
+redis
+# We need access to our shared models and schemas
+sqlalchemy
+asyncpg
