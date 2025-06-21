@@ -1,8 +1,9 @@
-import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from collections.abc import AsyncGenerator
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+from .core.config import settings
+
+DATABASE_URL = settings.DATABASE_URL
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
 
