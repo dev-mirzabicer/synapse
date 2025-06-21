@@ -1,4 +1,5 @@
-from arq import ArqRedis, create_pool
+from arq import ArqRedis
+from arq.connections import RedisSettings
 import uuid
 from langgraph.checkpoint.redis import RedisSaver
 from langchain_core.messages import ToolMessage, SystemMessage
@@ -43,7 +44,9 @@ async def run_tool(
     await checkpoint.update_state(
         {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
     )
-    await arq_pool.enqueue_job("continue_turn", thread_id=thread_id)
+    await arq_pool.enqueue_job(
+        "continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue"
+    )
     logger.info("run_tool.enqueued", thread_id=thread_id)
 
 
@@ -63,25 +66,17 @@ async def run_agent_llm(
     await checkpoint.update_state(
         {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
     )
-    await arq_pool.enqueue_job("continue_turn", thread_id=thread_id)
+    await arq_pool.enqueue_job("continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue")
     logger.info("run_agent.enqueued", alias=alias, thread_id=thread_id)
 
 
 class WorkerSettings:
     functions = [run_tool, run_agent_llm]
+    queue_name = "execution_queue"
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
 
-    async def on_startup(self, ctx):
-        try:
-            ctx['redis'] = await create_pool()
-            logger.info("worker.startup")
-        except Exception as e:
-            logger.error("worker.startup_failed", error=str(e))
-            raise RuntimeError(f"Failed to connect to Redis: {e}")
+    async def on_startup(ctx):
+        logger.info("worker.startup", redis_host=settings.REDIS_URL)
 
-    async def on_shutdown(self, ctx):
-        try:
-            await ctx['redis'].close()
-            logger.info("worker.shutdown")
-        except Exception as e:
-            logger.error("worker.shutdown_failed", error=str(e))
-            raise RuntimeError(f"Error closing Redis connection: {e}")
+    async def on_shutdown(ctx):
+        logger.info("worker.shutdown")

@@ -5,6 +5,7 @@ langchain-openai
 langchain-google-genai
 langchain-anthropic
 langgraph
+langgraph-checkpoint-redis
 tavily-python
 redis
 structlog

@@ -138,6 +138,7 @@ async def send_message(
                 user_id=str(current_user.id),
                 message_id=str(user_message.id),
                 turn_id=str(turn_id),
+                _queue_name="orchestrator_queue",
             )
             logger.info("send_message.enqueued", group_id=str(group_id))
             break

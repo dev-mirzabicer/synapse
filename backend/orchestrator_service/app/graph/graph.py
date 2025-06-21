@@ -1,8 +1,8 @@
 from langgraph.graph import StateGraph, END
-from .state import GraphState
-from .nodes import dispatch_node, sync_to_postgres_node
-from .router import router_function
-from .checkpoint import checkpoint
+from graph.state import GraphState
+from graph.nodes import dispatch_node, sync_to_postgres_node
+from graph.router import router_function
+from graph.checkpointer import checkpoint
 
 workflow = StateGraph(GraphState)
 

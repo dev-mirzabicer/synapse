@@ -1,5 +1,5 @@
 import re
-from .state import GraphState
+from graph.state import GraphState
 
 MENTION_REGEX = r'@(\w+)'
 MAX_TURNS = 20

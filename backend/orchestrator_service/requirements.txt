@@ -6,4 +6,5 @@ pydantic-settings
 arq
 langchain
 langgraph
+langgraph-checkpoint-redis
 structlog
