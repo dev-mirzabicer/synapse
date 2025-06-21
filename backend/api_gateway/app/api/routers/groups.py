@@ -19,24 +19,27 @@ async def create_group(
     current_user: User = Depends(get_current_user) # SECURE THIS ENDPOINT
 ):
     async with db() as session:
-        new_group = ChatGroup(name=group_in.name, owner_id=current_user.id)
-        result = await session.execute(select(User).limit(1))
-        user = result.scalars().first()
-        if not user:
-            raise HTTPException(status_code=404, detail="No users found. Please register a user first.")
+        try:
+            new_group = ChatGroup(name=group_in.name, owner_id=current_user.id)
+            result = await session.execute(select(User).limit(1))
+            user = result.scalars().first()
+            if not user:
+                raise HTTPException(status_code=404, detail="No users found. Please register a user first.")
 
-        new_group = ChatGroup(name=group_in.name, owner_id=user.id)
-        
-        # Every group has an Orchestrator and a User member by default
-        orchestrator_member = GroupMember(alias="Orchestrator", group=new_group)
-        user_member = GroupMember(alias="User", group=new_group)
+            new_group = ChatGroup(name=group_in.name, owner_id=user.id)
 
-        session.add(new_group)
-        session.add(orchestrator_member)
-        session.add(user_member)
-        await session.commit()
-        await session.refresh(new_group)
-        return new_group
+            orchestrator_member = GroupMember(alias="Orchestrator", group=new_group)
+            user_member = GroupMember(alias="User", group=new_group)
+
+            session.add(new_group)
+            session.add(orchestrator_member)
+            session.add(user_member)
+            await session.commit()
+            await session.refresh(new_group)
+            return new_group
+        except Exception as e:
+            await session.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 # TODO (Phase 1): Implement GET / endpoint to list groups for a user
 
@@ -59,16 +62,23 @@ async def send_message(
     )
 
     async with db() as session:
-        session.add(user_message)
-        await session.commit()
-        await session.refresh(user_message)
+        try:
+            session.add(user_message)
+            await session.commit()
+            await session.refresh(user_message)
+        except Exception as e:
+            await session.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     # Enqueue the job for the orchestrator to process
-    await arq_pool.enqueue_job(
-        "process_new_message", # Let's rename the task for clarity
-        group_id=str(group_id),
-        message_content=message_in.content,
-        user_id=str(current_user.id) # Pass user context if needed later
-    )
+    try:
+        await arq_pool.enqueue_job(
+            "process_new_message",
+            group_id=str(group_id),
+            message_content=message_in.content,
+            user_id=str(current_user.id),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to enqueue job: {e}")
 
     return user_message

@@ -13,15 +13,18 @@ router = APIRouter()
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db_session)):
     async with db() as session:
-        # Check if user already exists
-        result = await session.execute(select(User).where(User.email == user_in.email))
-        if result.scalars().first():
-            raise HTTPException(status_code=400, detail="Email already registered")
+        try:
+            result = await session.execute(select(User).where(User.email == user_in.email))
+            if result.scalars().first():
+                raise HTTPException(status_code=400, detail="Email already registered")
 
-        hashed_password = get_password_hash(user_in.password)
-        user = User(email=user_in.email, hashed_password=hashed_password)
-        session.add(user)
-        await session.commit()
+            hashed_password = get_password_hash(user_in.password)
+            user = User(email=user_in.email, hashed_password=hashed_password)
+            session.add(user)
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
     return {"message": "User created successfully"}
 
 @router.post("/login", response_model=Token)
@@ -30,8 +33,11 @@ async def login_for_access_token(
     db: AsyncSession = Depends(get_db_session)
 ):
     async with db() as session:
-        result = await session.execute(select(User).where(User.email == form_data.username))
-        user = result.scalars().first()
+        try:
+            result = await session.execute(select(User).where(User.email == form_data.username))
+            user = result.scalars().first()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(

@@ -1,6 +1,7 @@
 import json
 import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import HTTPException
 from redis.asyncio import Redis
 
 from app.core.arq_client import get_arq_pool # Re-using the pool for Redis connection
@@ -33,16 +34,19 @@ manager = ConnectionManager()
 async def redis_listener(redis: Redis, group_id: str):
     """Listens to a Redis channel and broadcasts messages."""
     channel = f"group:{group_id}"
-    pubsub = redis.pubsub()
-    await pubsub.subscribe(channel)
     try:
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(channel)
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message:
                 await manager.broadcast_to_group(group_id, message['data'].decode('utf-8'))
-            await asyncio.sleep(0.01) # Prevent busy-waiting
+            await asyncio.sleep(0.01)
     except asyncio.CancelledError:
         await pubsub.unsubscribe(channel)
+    except Exception as e:
+        await pubsub.unsubscribe(channel)
+        raise HTTPException(status_code=500, detail=f"Redis listener error: {e}")
 
 
 @router.websocket("/ws/{group_id}")
@@ -56,7 +60,10 @@ async def websocket_endpoint(
     # This is tricky as headers are not sent per message.
     # A common pattern is to send the token as the first message.
 
-    await manager.connect(websocket, group_id)
+    try:
+        await manager.connect(websocket, group_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to establish WebSocket: {e}")
     listener_task = asyncio.create_task(redis_listener(redis, group_id))
 
     try:
@@ -67,3 +74,9 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         listener_task.cancel()
         manager.disconnect(websocket, group_id)
+    except Exception as e:
+        listener_task.cancel()
+        manager.disconnect(websocket, group_id)
+        raise HTTPException(status_code=500, detail=f"WebSocket connection error: {e}")
+
+

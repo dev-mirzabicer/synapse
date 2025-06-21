@@ -1,8 +1,8 @@
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class GroupCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
 
 class GroupRead(BaseModel):
     id: uuid.UUID
@@ -17,9 +17,11 @@ class GroupMemberRead(BaseModel):
     This will be used to populate the GraphState.
     """
     id: uuid.UUID
-    alias: str
+    alias: str = Field(..., min_length=1, max_length=100)
     system_prompt: str
     tools: list[str] | None = []
 
     class Config:
         from_attributes = True
+
+

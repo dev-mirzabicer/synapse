@@ -1,8 +1,8 @@
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class MessageCreate(BaseModel):
-    content: str
+    content: str = Field(..., min_length=1, max_length=1000)
 
 class MessageRead(BaseModel):
     id: uuid.UUID
@@ -12,3 +12,4 @@ class MessageRead(BaseModel):
 
     class Config:
         from_attributes = True
+
