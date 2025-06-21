@@ -7,9 +7,9 @@ from sqlalchemy import create_engine
 from alembic import context
 
 import sys
-import os
 from pathlib import Path
 from dotenv import load_dotenv
+from shared.app.core.config import settings
 
 # Load environment variables from .env file
 # env_path = Path(__file__).resolve().parents[3] / ".env"
@@ -76,9 +76,8 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    # Get the original async database URL from the environment variable
-    # This is the single source of truth from our .env file
-    async_db_url = os.getenv("DATABASE_URL")
+    # Get the original async database URL from the shared settings
+    async_db_url = settings.DATABASE_URL
     if not async_db_url:
         raise ValueError("DATABASE_URL environment variable is not set")
 

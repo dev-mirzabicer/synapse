@@ -1,8 +1,9 @@
-import os
 from arq import create_pool
 from arq.connections import RedisSettings
 
-REDIS_URL = os.getenv("REDIS_URL")
+from shared.app.core.config import settings
+
+REDIS_URL = settings.REDIS_URL
 if not REDIS_URL:
     raise ValueError("REDIS_URL environment variable is not set")
 
