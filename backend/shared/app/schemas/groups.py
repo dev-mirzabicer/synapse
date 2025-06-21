@@ -1,8 +1,19 @@
 import uuid
 from pydantic import BaseModel, Field
 
+
+class AgentConfigCreate(BaseModel):
+    """Configuration for creating a non-user agent member."""
+    alias: str = Field(..., min_length=1, max_length=100)
+    role_prompt: str = Field(..., min_length=1)
+    tools: list[str] | None = []
+    provider: str = "gemini"
+    model: str = "models/gemini-pro"
+    temperature: float = 0.1
+
 class GroupCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+    members: list[AgentConfigCreate] = Field(default_factory=list)
 
 class GroupRead(BaseModel):
     id: uuid.UUID

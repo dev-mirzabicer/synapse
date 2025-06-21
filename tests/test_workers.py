@@ -26,6 +26,17 @@ sys.modules.setdefault("langgraph.checkpoint.redis", redis_stub)
 from orchestrator_service.app import worker as orch_worker
 from execution_workers.app import worker as exec_worker
 
+
+class DummyAsyncSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        pass
+
+    async def execute(self, stmt):
+        return types.SimpleNamespace(scalars=lambda: types.SimpleNamespace(all=lambda: []))
+
 @pytest.mark.asyncio
 async def test_start_turn(monkeypatch):
     called = {}
@@ -34,6 +45,7 @@ async def test_start_turn(monkeypatch):
         called['config'] = config
     monkeypatch.setattr(orch_worker.graph_app, 'ainvoke', fake_ainvoke)
     orch_worker._arq_pool = 'pool'
+    monkeypatch.setattr(orch_worker, 'AsyncSessionLocal', lambda: DummyAsyncSession())
     await orch_worker.start_turn({}, 'gid', 'hi', 'uid')
     assert called['input']['messages'][0].content == 'hi'
     assert called['config']['arq_pool'] == 'pool'

@@ -3,6 +3,10 @@ import structlog
 from arq import create_pool, ArqRedis
 from langchain_core.messages import HumanMessage
 from .graph.graph import graph_app
+from sqlalchemy import select
+from shared.app.db import AsyncSessionLocal
+from shared.app.models.chat import GroupMember
+from shared.app.schemas.groups import GroupMemberRead
 from shared.app.core.logging import setup_logging
 
 setup_logging()
@@ -15,7 +19,18 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str):
     """Starts a new turn initiated by a user."""
     logger.info("start_turn", group_id=group_id)
     config = {"configurable": {"thread_id": group_id}}
-    graph_input = {"messages": [HumanMessage(content=message_content)]}
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(GroupMember).where(GroupMember.group_id == group_id)
+        )
+        members = [GroupMemberRead.model_validate(m) for m in result.scalars().all()]
+
+    graph_input = {
+        "messages": [HumanMessage(content=message_content)],
+        "group_id": group_id,
+        "group_members": members,
+        "turn_count": 0,
+    }
     # The graph will run, dispatch a job, and then pause.
     arq_pool: ArqRedis | None = ctx.get("redis", _arq_pool)
     if arq_pool is None:

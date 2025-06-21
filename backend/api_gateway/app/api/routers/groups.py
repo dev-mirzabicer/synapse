@@ -8,6 +8,7 @@ from app.core.security import get_current_user
 import structlog
 from shared.app.db import get_db_session
 from shared.app.schemas.chat import GroupCreate, GroupRead
+from shared.app.agents.prompts import ORCHESTRATOR_PROMPT, AGENT_BASE_PROMPT
 from shared.app.models.chat import ChatGroup, GroupMember, User, Message
 from shared.app.schemas.chat import MessageCreate, MessageRead
 
@@ -29,21 +30,29 @@ async def create_group(
             orchestrator_member = GroupMember(
                 alias="Orchestrator",
                 group=new_group,
-                provider="openai",
-                model="gpt-4o",
-                temperature=0.1,
-            )
-            user_member = GroupMember(
-                alias="User",
-                group=new_group,
-                provider="openai",
-                model="gpt-4o",
+                system_prompt=ORCHESTRATOR_PROMPT,
+                provider="gemini",
+                model="models/gemini-pro",
                 temperature=0.1,
             )
 
             session.add(new_group)
             session.add(orchestrator_member)
-            session.add(user_member)
+
+            for member in group_in.members:
+                system_prompt = f"{AGENT_BASE_PROMPT}\n{member.role_prompt}"
+                session.add(
+                    GroupMember(
+                        alias=member.alias,
+                        group=new_group,
+                        system_prompt=system_prompt,
+                        tools=member.tools,
+                        provider=member.provider,
+                        model=member.model,
+                        temperature=member.temperature,
+                    )
+                )
+
             await session.commit()
             await session.refresh(new_group)
             logger.info("create_group.success", group_id=str(new_group.id))
@@ -98,19 +107,6 @@ async def send_message(
             elif getattr(group, "owner_id", current_user.id) != current_user.id:
                 raise HTTPException(status_code=404, detail="Group not found")
 
-            try:
-                member_check = await session.execute(
-                    select(GroupMember).where(
-                        GroupMember.group_id == group_id,
-                        GroupMember.alias == "User",
-                    )
-                )
-                if not member_check.scalars().first():
-                    raise HTTPException(
-                        status_code=400, detail="Sender not a member of this group"
-                    )
-            except AttributeError:
-                pass
 
             # Logic from 'main': Create the message object
             turn_id = uuid.uuid4()
