@@ -68,19 +68,19 @@ services:
       redis:
         condition: service_healthy
 
-  # execution_workers:
-  #   container_name: synapse_workers
-  #   build:
-  #     context: ./backend/execution_workers
-  #     dockerfile: Dockerfile
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   networks:
-  #     - synapse_net
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
+  execution_workers:
+    container_name: synapse_workers
+    build:
+      context: ./backend
+      dockerfile: execution_workers/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - synapse_net
+    depends_on:
+      redis:
+        condition: service_healthy
 
 # ------------------ NETWORKS & VOLUMES ------------------
 networks:

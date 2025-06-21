@@ -26,6 +26,7 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str, mes
 
     user_msg = HumanMessage(content=message_content)
     user_msg.id = message_id
+    user_msg.name = "User"
 
     graph_input = {
         "messages": [user_msg],
