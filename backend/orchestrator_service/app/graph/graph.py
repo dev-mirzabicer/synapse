@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, END
 from graph.state import GraphState
 from graph.nodes import dispatch_node, sync_to_postgres_node
 from graph.router import router_function
-from graph.checkpointer import checkpoint
+from graph.checkpoint import checkpoint
 
 workflow = StateGraph(GraphState)
 
