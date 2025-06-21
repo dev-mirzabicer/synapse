@@ -36,7 +36,9 @@ class ConnectionManager:
                 # Connection might already be closed; ignore
                 pass
 
+
 manager = ConnectionManager()
+
 
 async def redis_listener(redis: Redis, group_id: str):
     """Listens to a Redis channel and broadcasts messages."""
@@ -45,10 +47,14 @@ async def redis_listener(redis: Redis, group_id: str):
     await pubsub.subscribe(channel)
     try:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=1.0
+            )
             if message:
-                await manager.broadcast_to_group(group_id, message['data'].decode('utf-8'))
-            await asyncio.sleep(0.01) # Prevent busy-waiting
+                await manager.broadcast_to_group(
+                    group_id, message["data"].decode("utf-8")
+                )
+            await asyncio.sleep(0.01)  # Prevent busy-waiting
     except asyncio.CancelledError:
         await pubsub.unsubscribe(channel)
 

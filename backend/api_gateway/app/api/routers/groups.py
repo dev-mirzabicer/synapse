@@ -21,7 +21,6 @@ async def create_group(
 ):
     async with db() as session:
         new_group = ChatGroup(name=group_in.name, owner_id=current_user.id)
-
         # Every group has an Orchestrator and a User member by default
         orchestrator_member = GroupMember(alias="Orchestrator", group=new_group)
         user_member = GroupMember(alias="User", group=new_group)
