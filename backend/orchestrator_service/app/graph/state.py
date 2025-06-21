@@ -26,3 +26,9 @@ class GraphState(TypedDict):
 
     # A counter to prevent infinite loops, a crucial safety mechanism.
     turn_count: int
+
+    # Index of the last message persisted to the database.
+    last_saved_index: int
+
+    # The ID representing this conversation turn.
+    turn_id: str

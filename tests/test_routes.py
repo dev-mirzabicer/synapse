@@ -128,7 +128,7 @@ def test_send_message(monkeypatch, client):
     calls = {}
     class FakePool:
         async def enqueue_job(self, *a, **kw):
-            calls['called']=True
+            calls['called']=kw
     override_db = lambda: FakeSessionMaker(session)
     app.dependency_overrides[groups_router.get_db_session] = override_db
     app.dependency_overrides[groups_router.get_current_user] = lambda: user
@@ -137,4 +137,6 @@ def test_send_message(monkeypatch, client):
     resp = client.post(f"/groups/{gid}/messages", json={"content": "hi"})
     assert resp.status_code == 202
     assert calls.get('called')
+    assert 'message_id' in calls['called']
+    assert 'turn_id' in calls['called']
     app.dependency_overrides = {}

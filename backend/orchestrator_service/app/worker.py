@@ -1,4 +1,3 @@
-import json
 import structlog
 from arq import create_pool, ArqRedis
 from langchain_core.messages import HumanMessage
@@ -15,7 +14,7 @@ logger = structlog.get_logger(__name__)
 _arq_pool: ArqRedis | None = None
 
 
-async def start_turn(ctx, group_id: str, message_content: str, user_id: str):
+async def start_turn(ctx, group_id: str, message_content: str, user_id: str, message_id: str, turn_id: str):
     """Starts a new turn initiated by a user."""
     logger.info("start_turn", group_id=group_id)
     config = {"configurable": {"thread_id": group_id}}
@@ -25,11 +24,16 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str):
         )
         members = [GroupMemberRead.model_validate(m) for m in result.scalars().all()]
 
+    user_msg = HumanMessage(content=message_content)
+    user_msg.id = message_id
+
     graph_input = {
-        "messages": [HumanMessage(content=message_content)],
+        "messages": [user_msg],
         "group_id": group_id,
         "group_members": members,
         "turn_count": 0,
+        "last_saved_index": 1,
+        "turn_id": turn_id,
     }
     # The graph will run, dispatch a job, and then pause.
     arq_pool: ArqRedis | None = ctx.get("redis", _arq_pool)
