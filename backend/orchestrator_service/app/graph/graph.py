@@ -1,4 +1,4 @@
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, END
 from .state import GraphState
 from .nodes import dispatch_node, sync_to_postgres_node
 from .router import router_function
@@ -24,6 +24,6 @@ workflow.add_conditional_edges(
     }
 )
 # After syncing, the process is truly finished.
-workflow.add_edge("sync_to_postgres", "__END__")
+workflow.add_edge("sync_to_postgres", END)
 
 graph_app = workflow.compile(checkpointer=checkpoint)
