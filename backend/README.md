@@ -102,6 +102,8 @@ State persistence is handled through a dual-database approach:
 3.  Open the `.env` file and fill in the required secrets:
     *   `SECRET_KEY`: A strong, random key for JWT signing. You can generate one with `openssl rand -hex 32`.
     *   `OPENAI_API_KEY`: Your API key for OpenAI.
+    *   `GEMINI_API_KEY`: Your API key for Google Gemini.
+    *   `CLAUDE_API_KEY`: Your API key for Anthropic Claude.
     *   `TAVILY_API_KEY`: Your API key for the Tavily search service.
     *   Database and Redis settings are pre-populated for local development.
 

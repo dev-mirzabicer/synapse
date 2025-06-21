@@ -20,6 +20,9 @@ class GroupMemberRead(BaseModel):
     alias: str = Field(..., min_length=1, max_length=100)
     system_prompt: str
     tools: list[str] | None = []
+    provider: str = "openai"
+    model: str = "gpt-4o"
+    temperature: float = 0.1
 
     class Config:
         from_attributes = True

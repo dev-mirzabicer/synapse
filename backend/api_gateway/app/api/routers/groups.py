@@ -26,8 +26,20 @@ async def create_group(
         try:
             new_group = ChatGroup(name=group_in.name, owner_id=current_user.id)
 
-            orchestrator_member = GroupMember(alias="Orchestrator", group=new_group)
-            user_member = GroupMember(alias="User", group=new_group)
+            orchestrator_member = GroupMember(
+                alias="Orchestrator",
+                group=new_group,
+                provider="openai",
+                model="gpt-4o",
+                temperature=0.1,
+            )
+            user_member = GroupMember(
+                alias="User",
+                group=new_group,
+                provider="openai",
+                model="gpt-4o",
+                temperature=0.1,
+            )
 
             session.add(new_group)
             session.add(orchestrator_member)
