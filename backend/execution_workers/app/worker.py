@@ -41,9 +41,17 @@ async def run_tool(
     )
     message.id = str(uuid.uuid4())
 
-    await checkpoint.update_state(
-        {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
-    )
+    # await checkpoint.update_state(
+    #     {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
+    # )
+    if hasattr(checkpoint, "aupdate_state"): # new helper
+        await checkpoint.aupdate_state(
+            {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
+        )
+    else:  # old helper
+        await checkpoint.update_state(
+            {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
+        )
     await arq_pool.enqueue_job(
         "continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue"
     )
@@ -63,9 +71,17 @@ async def run_agent_llm(
     response = await run_agent(messages, group_members, alias)
     response.id = str(uuid.uuid4())
 
-    await checkpoint.update_state(
-        {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
-    )
+    # await checkpoint.update_state(
+    #     {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
+    # )
+    if hasattr(checkpoint, "aupdate_state"):  # new helper
+        await checkpoint.aupdate_state(
+            {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
+        )
+    else:  # old helper
+        await checkpoint.update_state(
+            {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
+        )
     await arq_pool.enqueue_job("continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue")
     logger.info("run_agent.enqueued", alias=alias, thread_id=thread_id)
 
