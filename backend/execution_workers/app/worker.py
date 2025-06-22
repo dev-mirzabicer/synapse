@@ -15,7 +15,8 @@ from shared.app.utils.message_serde import deserialize_messages
 setup_logging()
 logger = structlog.get_logger(__name__)
 
-checkpoint = RedisSaver.from_conn_string(settings.REDIS_URL)
+# CORRECT: Rename to reflect that this is a context manager.
+checkpointer_context = RedisSaver.from_conn_string(settings.REDIS_URL)
 
 
 async def run_tool(
@@ -41,17 +42,12 @@ async def run_tool(
     )
     message.id = str(uuid.uuid4())
 
-    # await checkpoint.update_state(
-    #     {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
-    # )
-    if hasattr(checkpoint, "aupdate_state"): # new helper
-        await checkpoint.aupdate_state(
-            {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
-        )
-    else:  # old helper
+    # CORRECT: Use the checkpointer as a context manager to get the saver instance.
+    with checkpointer_context as checkpoint:
         await checkpoint.update_state(
             {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
         )
+
     await arq_pool.enqueue_job(
         "continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue"
     )
@@ -71,17 +67,12 @@ async def run_agent_llm(
     response = await run_agent(messages, group_members, alias)
     response.id = str(uuid.uuid4())
 
-    # await checkpoint.update_state(
-    #     {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
-    # )
-    if hasattr(checkpoint, "aupdate_state"):  # new helper
-        await checkpoint.aupdate_state(
-            {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
-        )
-    else:  # old helper
+    # CORRECT: Use the checkpointer as a context manager to get the saver instance.
+    with checkpointer_context as checkpoint:
         await checkpoint.update_state(
             {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
         )
+
     await arq_pool.enqueue_job("continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue")
     logger.info("run_agent.enqueued", alias=alias, thread_id=thread_id)
 

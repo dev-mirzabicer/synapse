@@ -4,7 +4,8 @@ langchain
 langchain-openai
 langchain-google-genai
 langchain-anthropic
-langgraph
+langgraph==0.4.8
+langgraph-checkpoint==2.1.0
 langgraph-checkpoint-redis
 tavily-python
 redis

@@ -1,7 +1,7 @@
 import json
 import uuid
 from redis.asyncio import Redis
-from graph.state import GraphState
+from .state import GraphState
 from shared.app.utils.message_serde import serialize_messages
 from shared.app.db import AsyncSessionLocal
 from shared.app.models.chat import Message
@@ -9,25 +9,23 @@ from sqlalchemy.dialects.postgresql import insert
 from shared.app.core.config import settings
 import structlog
 from shared.app.core.logging import setup_logging
+from .router import route_logic # Import the routing logic
 
 setup_logging()
 logger = structlog.get_logger(__name__)
 
 
-async def _persist_new_messages(state: GraphState) -> None:
+async def _persist_new_messages(state: GraphState) -> dict:
     """
     Persists any new messages from the state to the application's database
-    (Postgres) and broadcasts them over a Redis pub/sub channel.
-    
-    This function NO LONGER interacts with the LangGraph checkpointer.
+    and returns a dictionary with the updated message index.
     """
     last_saved = state.get("last_saved_index", 0)
     new_messages = state["messages"][last_saved:]
     if not new_messages:
-        return
+        return {}
 
     async with AsyncSessionLocal() as session:
-        # Use a single Redis client for all publications in this scope
         redis = Redis.from_url(settings.REDIS_URL)
         try:
             for msg in new_messages:
@@ -44,7 +42,6 @@ async def _persist_new_messages(state: GraphState) -> None:
                     .on_conflict_do_nothing(index_elements=["id"])
                 )
                 await session.execute(stmt)
-                # Broadcast the message for real-time updates
                 await redis.publish(
                     f"group:{state['group_id']}",
                     json.dumps(msg.dict()),
@@ -56,12 +53,29 @@ async def _persist_new_messages(state: GraphState) -> None:
             await session.rollback()
         finally:
             await redis.close()
+    
+    return {"last_saved_index": last_saved + len(new_messages)}
 
 
-async def dispatch_node(state: GraphState, config: dict) -> dict:
+async def router_node(state: GraphState, config: dict) -> dict:
     """
-    A node that persists new messages and then dispatches jobs to execution
-    workers. It updates the graph state by returning the new last_saved_index.
+    This is the new primary node. It persists new messages and then runs
+    the routing logic to determine the next step, updating the state accordingly.
+    """
+    # First, persist any new messages and get the updated index
+    persistence_update = await _persist_new_messages(state)
+
+    # Now, run the routing logic to get the state updates (e.g., next_actors)
+    routing_update = route_logic(state)
+
+    # Return the combined updates
+    return {**persistence_update, **routing_update}
+
+
+async def dispatcher_node(state: GraphState, config: dict) -> dict:
+    """
+    This node reads the state (updated by the router) and dispatches jobs
+    to the appropriate execution workers.
     """
     configurable_config = config.get("configurable", {})
     arq_pool = configurable_config.get("arq_pool")
@@ -70,15 +84,8 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
     if not arq_pool or not thread_id:
         raise ValueError("arq_pool or thread_id missing from runtime configuration.")
 
-    # 1. Perform the side-effect of persisting messages
-    await _persist_new_messages(state)
-
-    # 2. Prepare state updates and actions
-    last_saved = state.get("last_saved_index", 0)
-    new_index = last_saved + len(state["messages"][last_saved:])
     last_message = state["messages"][-1]
 
-    # 3. Enqueue jobs for workers
     if tool_calls := getattr(last_message, "tool_calls", []):
         for call in tool_calls:
             logger.info("dispatch.tool", tool=call["name"], thread_id=thread_id)
@@ -103,28 +110,17 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
                 thread_id=thread_id,
                 _queue_name="execution_queue",
             )
-            
-    # 4. CORRECT: Return the state update for LangGraph to handle.
-    return {"last_saved_index": new_index}
+    # This node only performs side-effects (enqueuing jobs), it doesn't change the state.
+    return {}
 
 
 async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     """
     A terminal node that ensures any final messages are persisted before
-    the graph finishes. It returns the final state update.
+    the graph finishes its run.
     """
-    configurable_config = config.get("configurable", {})
-    thread_id = configurable_config.get("thread_id")
+    thread_id = config.get("configurable", {}).get("thread_id")
     logger.info("sync_to_postgres.start", thread_id=thread_id)
-
-    # 1. Persist any final messages
     await _persist_new_messages(state)
-
-    # 2. Calculate the final index
-    last_saved = state.get("last_saved_index", 0)
-    new_index = last_saved + len(state["messages"][last_saved:])
-
     logger.info("sync_to_postgres.complete", thread_id=thread_id)
-    
-    # 3. CORRECT: Return the final state update.
-    return {"last_saved_index": new_index}
+    return {}

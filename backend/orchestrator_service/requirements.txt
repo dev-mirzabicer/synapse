@@ -5,6 +5,7 @@ asyncpg
 pydantic-settings
 arq
 langchain
-langgraph
+langgraph==0.4.8
+langgraph-checkpoint==2.1.0
 langgraph-checkpoint-redis
 structlog

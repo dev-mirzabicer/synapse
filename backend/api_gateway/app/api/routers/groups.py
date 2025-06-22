@@ -33,7 +33,7 @@ async def create_group(
                 group=new_group,
                 system_prompt=ORCHESTRATOR_PROMPT,
                 provider="gemini",
-                model="models/gemini-pro",
+                model="gemini-2.5-pro",  # <-- FIX: Removed "models/" prefix
                 temperature=0.1,
             )
 

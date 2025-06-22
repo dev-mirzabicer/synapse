@@ -8,7 +8,7 @@ class AgentConfigCreate(BaseModel):
     role_prompt: str = Field(..., min_length=1)
     tools: list[str] | None = []
     provider: str = "gemini"
-    model: str = "models/gemini-pro"
+    model: str = "gemini-2.5-pro"
     temperature: float = 0.1
 
 class GroupCreate(BaseModel):

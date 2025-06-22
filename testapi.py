@@ -21,7 +21,7 @@ RESEARCHER_AGENT = {
     "role_prompt": "You are a world-class researcher. Your job is to use the web_search tool to find information.",
     "tools": ["web_search"],
     "provider": "gemini",
-    "model": "models/gemini-pro",
+    "model": "gemini-2.5-pro",
     "temperature": 0.0,
 }
 

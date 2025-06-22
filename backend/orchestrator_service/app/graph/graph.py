@@ -1,32 +1,44 @@
 from langgraph.graph import StateGraph, END
-from graph.state import GraphState
-from graph.nodes import dispatch_node, sync_to_postgres_node
-from graph.router import router_function
+from .state import GraphState
+from .nodes import router_node, dispatcher_node, sync_to_postgres_node
 
-# Define the workflow structure without a checkpointer.
-# The checkpointer will be added dynamically during compilation.
+# Define the workflow structure with the new nodes.
 workflow = StateGraph(GraphState)
 
-# We now have two primary nodes in the orchestrator
-workflow.add_node("dispatch", dispatch_node)
+workflow.add_node("router", router_node)
+workflow.add_node("dispatcher", dispatcher_node)
 workflow.add_node("sync_to_postgres", sync_to_postgres_node)
 
-# The entry point is always the router, which decides the first action.
-workflow.set_entry_point("dispatch")
+# The entry point is now the router node.
+workflow.set_entry_point("router")
 
-# The router now directs traffic to the correct node.
+def should_dispatch_or_end(state: GraphState) -> str:
+    """
+    A conditional edge that decides whether to dispatch a worker or end the flow.
+    """
+    last_message = state["messages"][-1]
+    # If the router decided on next_actors or the last message has tool_calls, dispatch.
+    if state.get("next_actors") or getattr(last_message, 'tool_calls', None):
+        return "dispatcher"
+    # Otherwise, there's nothing to do, so sync and end.
+    else:
+        return "sync_to_postgres"
+
+# Add the conditional edge from the router.
 workflow.add_conditional_edges(
-    "dispatch",
-    router_function,
+    "router",
+    should_dispatch_or_end,
     {
-        "dispatch_tools": "dispatch",
-        "dispatch_agents": "dispatch",
+        "dispatcher": "dispatcher",
         "sync_to_postgres": "sync_to_postgres"
     }
 )
-# After syncing, the process is truly finished.
+
+# After dispatching a job, the graph's current turn is over. It must END.
+workflow.add_edge("dispatcher", END)
+
+# The sync node is also a terminal state.
 workflow.add_edge("sync_to_postgres", END)
 
-# We export the uncompiled workflow. It will be compiled with a checkpointer
-# inside the async worker functions.
+# Compile the final graph.
 graph_app_uncompiled = workflow.compile()
