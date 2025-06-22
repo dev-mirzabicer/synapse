@@ -10,9 +10,6 @@ from shared.app.core.config import settings
 import structlog
 from shared.app.core.logging import setup_logging
 
-# Import from the original 'checkpoint.py' file.
-from graph.checkpoint import checkpoint as graph_checkpoint
-
 setup_logging()
 logger = structlog.get_logger(__name__)
 
@@ -22,6 +19,12 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
     Persists any new messages from the state to the database and broadcasts
     them over a Redis pub/sub channel for real-time updates.
     """
+    # The checkpointer is now passed in the config
+    checkpointer = config.get("checkpointer")
+    if not checkpointer:
+        logger.warning("persist_new_messages.no_checkpointer")
+        return
+
     last_saved = state.get("last_saved_index", 0)
     new_messages = state["messages"][last_saved:]
     if not new_messages:
@@ -52,7 +55,8 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
         finally:
             await redis.close()
 
-    await graph_checkpoint.update_state(
+    # Use the checkpointer from config to update the state
+    await checkpointer.update_state(
         config,
         {"last_saved_index": last_saved + len(new_messages)},
     )
@@ -105,8 +109,7 @@ async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     thread_id = config["configurable"]["thread_id"]
     logger.info("sync_to_postgres.start", thread_id=thread_id)
 
-    # The graph passes the most current state to this node.
-    # We just need to persist any messages from this final state.
+    # The graph passes the final state; we just need to persist from it.
     await _persist_new_messages(state, config)
 
     logger.info("sync_to_postgres.complete", thread_id=thread_id)
