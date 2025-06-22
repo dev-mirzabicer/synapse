@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str | None = None
 
     # --- Logging ---
-    LOG_LEVEL: str = "INFO"
+    # most verbose logging level is "DEBUG", least verbose is "CRITICAL"
+    LOG_LEVEL: str = "DEBUG"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')
 

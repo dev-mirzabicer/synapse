@@ -2,8 +2,8 @@ import structlog
 from arq import ArqRedis
 from arq.connections import RedisSettings
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from graph.graph import graph_app_uncompiled
-from graph.checkpoint import checkpointer_context
 from sqlalchemy import select
 from shared.app.db import AsyncSessionLocal
 from shared.app.models.chat import GroupMember
@@ -40,9 +40,8 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str, mes
     
     arq_pool: ArqRedis = ctx["redis"]
     
-    with checkpointer_context as checkpointer:
-        # CORRECT: All runtime resources and identifiers must be placed
-        # inside the 'configurable' dictionary, as per LangGraph documentation.
+    # FIX: Create a fresh context manager for each invocation.
+    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
         invocation_config = {
             "configurable": {
                 "thread_id": group_id,
@@ -51,7 +50,6 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str, mes
             }
         }
         
-        # Pass the correctly structured config to ainvoke()
         await graph_app_uncompiled.ainvoke(graph_input, config=invocation_config)
 
 
@@ -60,8 +58,8 @@ async def continue_turn(ctx, thread_id: str):
     logger.info("continue_turn", thread_id=thread_id)
     arq_pool: ArqRedis = ctx["redis"]
 
-    with checkpointer_context as checkpointer:
-        # CORRECT: The same structured config is needed here for consistency.
+    # FIX: Create a fresh context manager for each invocation.
+    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
         invocation_config = {
             "configurable": {
                 "thread_id": thread_id,
@@ -70,7 +68,6 @@ async def continue_turn(ctx, thread_id: str):
             }
         }
         
-        # We invoke with empty input and the structured config.
         await graph_app_uncompiled.ainvoke(None, config=invocation_config)
 
 
@@ -81,6 +78,10 @@ class WorkerSettings:
 
     async def on_startup(ctx):
         logger.info("worker.startup", redis_host=settings.REDIS_URL)
+        # ROBUSTNESS: Ensure the Redis index exists before starting.
+        async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
+            await checkpointer.asetup()
+        logger.info("worker.startup.checkpointer_ready")
 
     async def on_shutdown(ctx):
         logger.info("worker.shutdown")

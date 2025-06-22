@@ -1,8 +1,10 @@
 from arq import ArqRedis
 from arq.connections import RedisSettings
 import uuid
-from langgraph.checkpoint.redis import RedisSaver
-from langchain_core.messages import ToolMessage, SystemMessage
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+from langchain_core.messages import ToolMessage, SystemMessage, BaseMessage
+from langchain.load.dump import dumpd # <-- IMPORT THE CORRECT SERIALIZER
+
 import structlog
 
 from shared.app.core.config import settings
@@ -14,9 +16,6 @@ from shared.app.utils.message_serde import deserialize_messages
 
 setup_logging()
 logger = structlog.get_logger(__name__)
-
-# CORRECT: Rename to reflect that this is a context manager.
-checkpointer_context = RedisSaver.from_conn_string(settings.REDIS_URL)
 
 
 async def run_tool(
@@ -42,11 +41,19 @@ async def run_tool(
     )
     message.id = str(uuid.uuid4())
 
-    # CORRECT: Use the checkpointer as a context manager to get the saver instance.
-    with checkpointer_context as checkpoint:
-        await checkpoint.update_state(
-            {"configurable": {"thread_id": thread_id}}, {"messages": [message]}
-        )
+    config = {"configurable": {"thread_id": thread_id}}
+    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpoint:
+        current_checkpoint = await checkpoint.aget(config)
+        if not current_checkpoint:
+            logger.error("run_tool.checkpoint_not_found", thread_id=thread_id)
+            return
+
+        # ROBUSTNESS FIX: Use dumpd for correct LangChain serialization
+        serialized_message = dumpd(message)
+        current_checkpoint["channel_values"]["messages"].append(serialized_message)
+        
+        await checkpoint.aput(config, current_checkpoint)
+        logger.info("run_tool.checkpoint_updated", thread_id=thread_id)
 
     await arq_pool.enqueue_job(
         "continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue"
@@ -67,11 +74,19 @@ async def run_agent_llm(
     response = await run_agent(messages, group_members, alias)
     response.id = str(uuid.uuid4())
 
-    # CORRECT: Use the checkpointer as a context manager to get the saver instance.
-    with checkpointer_context as checkpoint:
-        await checkpoint.update_state(
-            {"configurable": {"thread_id": thread_id}}, {"messages": [response]}
-        )
+    config = {"configurable": {"thread_id": thread_id}}
+    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpoint:
+        current_checkpoint = await checkpoint.aget(config)
+        if not current_checkpoint:
+            logger.error("run_agent_llm.checkpoint_not_found", thread_id=thread_id)
+            return
+
+        # ROBUSTNESS FIX: Use dumpd for correct LangChain serialization
+        serialized_message = dumpd(response)
+        current_checkpoint["channel_values"]["messages"].append(serialized_message)
+
+        await checkpoint.aput(config, current_checkpoint)
+        logger.info("run_agent_llm.checkpoint_updated", thread_id=thread_id)
 
     await arq_pool.enqueue_job("continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue")
     logger.info("run_agent.enqueued", alias=alias, thread_id=thread_id)
@@ -84,6 +99,9 @@ class WorkerSettings:
 
     async def on_startup(ctx):
         logger.info("worker.startup", redis_host=settings.REDIS_URL)
+        async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
+            await checkpointer.asetup()
+        logger.info("worker.startup.checkpointer_ready")
 
     async def on_shutdown(ctx):
         logger.info("worker.shutdown")
