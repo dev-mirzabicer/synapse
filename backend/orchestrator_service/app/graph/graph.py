@@ -2,14 +2,15 @@ from langgraph.graph import StateGraph, END
 from .state import GraphState
 from .nodes import router_node, dispatcher_node, sync_to_postgres_node
 
-# Define the workflow structure with the new nodes.
+# Define the workflow structure. This is the graph DEFINITION.
+# It will be compiled with a checkpointer at runtime in the worker.
 workflow = StateGraph(GraphState)
 
 workflow.add_node("router", router_node)
 workflow.add_node("dispatcher", dispatcher_node)
 workflow.add_node("sync_to_postgres", sync_to_postgres_node)
 
-# The entry point is now the router node.
+# The entry point is the router node.
 workflow.set_entry_point("router")
 
 def should_dispatch_or_end(state: GraphState) -> str:
@@ -35,10 +36,11 @@ workflow.add_conditional_edges(
 )
 
 # After dispatching a job, the graph's current turn is over. It must END.
+# The checkpointer will save the state before the graph execution finishes.
 workflow.add_edge("dispatcher", END)
 
 # The sync node is also a terminal state.
 workflow.add_edge("sync_to_postgres", END)
 
-# Compile the final graph.
-graph_app_uncompiled = workflow.compile()
+# DO NOT COMPILE HERE. Compilation will happen in the worker
+# to inject the checkpointer instance correctly.

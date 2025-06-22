@@ -42,9 +42,18 @@ async def _persist_new_messages(state: GraphState) -> dict:
                     .on_conflict_do_nothing(index_elements=["id"])
                 )
                 await session.execute(stmt)
+
+                # Construct a dictionary that the frontend expects, including the sender_alias.
+                broadcast_message = {
+                    "id": str(getattr(msg, "id", uuid.uuid4())),
+                    "sender_alias": getattr(msg, "name", "system"),
+                    "content": str(msg.content),
+                    "turn_id": str(state["turn_id"]),
+                }
+
                 await redis.publish(
                     f"group:{state['group_id']}",
-                    json.dumps(msg.dict()),
+                    json.dumps(broadcast_message),
                 )
             await session.commit()
             logger.info("persist_new_messages.success", count=len(new_messages))
