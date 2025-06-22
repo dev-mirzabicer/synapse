@@ -19,8 +19,9 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
     Persists any new messages from the state to the database and broadcasts
     them over a Redis pub/sub channel for real-time updates.
     """
-    # The checkpointer is now passed in the config
-    checkpointer = config.get("checkpointer")
+    # CORRECT: Access runtime values from within the 'configurable' key.
+    configurable_config = config.get("configurable", {})
+    checkpointer = configurable_config.get("checkpointer")
     if not checkpointer:
         logger.warning("persist_new_messages.no_checkpointer")
         return
@@ -55,7 +56,8 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
         finally:
             await redis.close()
 
-    # Use the checkpointer from config to update the state
+    # CORRECT: The checkpointer's update_state method needs the full config object
+    # that was passed to the node to identify the thread.
     await checkpointer.update_state(
         config,
         {"last_saved_index": last_saved + len(new_messages)},
@@ -67,8 +69,13 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
     A node that persists new messages and then dispatches jobs to the appropriate
     execution workers based on the content of the last message in the state.
     """
-    arq_pool = config["arq_pool"]
-    thread_id = config["configurable"]["thread_id"]
+    # CORRECT: Access all runtime values from the nested 'configurable' dictionary.
+    configurable_config = config.get("configurable", {})
+    arq_pool = configurable_config.get("arq_pool")
+    thread_id = configurable_config.get("thread_id")
+
+    if not arq_pool or not thread_id:
+        raise ValueError("arq_pool or thread_id missing from runtime configuration.")
 
     await _persist_new_messages(state, config)
 
@@ -106,7 +113,9 @@ async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     A terminal node that ensures any final messages are persisted before
     the graph finishes its run. This is a crucial cleanup step.
     """
-    thread_id = config["configurable"]["thread_id"]
+    # CORRECT: Access thread_id from the nested 'configurable' dictionary.
+    configurable_config = config.get("configurable", {})
+    thread_id = configurable_config.get("thread_id")
     logger.info("sync_to_postgres.start", thread_id=thread_id)
 
     # The graph passes the final state; we just need to persist from it.

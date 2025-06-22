@@ -18,7 +18,6 @@ logger = structlog.get_logger(__name__)
 async def start_turn(ctx, group_id: str, message_content: str, user_id: str, message_id: str, turn_id: str):
     """Starts a new turn initiated by a user."""
     logger.info("start_turn", group_id=group_id)
-    run_control_config = {"configurable": {"thread_id": group_id}}
     
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -42,32 +41,37 @@ async def start_turn(ctx, group_id: str, message_content: str, user_id: str, mes
     arq_pool: ArqRedis = ctx["redis"]
     
     with checkpointer_context as checkpointer:
-        # CORRECTED: Inject both the checkpointer and arq_pool as resources
-        # using with_config(). This is the robust way.
-        graph_with_resources = graph_app_uncompiled.with_config({
-            "checkpointer": checkpointer,
-            "arq_pool": arq_pool
-        })
+        # CORRECT: All runtime resources and identifiers must be placed
+        # inside the 'configurable' dictionary, as per LangGraph documentation.
+        invocation_config = {
+            "configurable": {
+                "thread_id": group_id,
+                "checkpointer": checkpointer,
+                "arq_pool": arq_pool,
+            }
+        }
         
-        # Pass only the run-control config to ainvoke()
-        await graph_with_resources.ainvoke(graph_input, config=run_control_config)
+        # Pass the correctly structured config to ainvoke()
+        await graph_app_uncompiled.ainvoke(graph_input, config=invocation_config)
 
 
 async def continue_turn(ctx, thread_id: str):
     """Continues a turn after an execution_worker has updated the state."""
     logger.info("continue_turn", thread_id=thread_id)
-    run_control_config = {"configurable": {"thread_id": thread_id}}
     arq_pool: ArqRedis = ctx["redis"]
 
     with checkpointer_context as checkpointer:
-        # CORRECTED: Inject resources here as well.
-        graph_with_resources = graph_app_uncompiled.with_config({
-            "checkpointer": checkpointer,
-            "arq_pool": arq_pool
-        })
+        # CORRECT: The same structured config is needed here for consistency.
+        invocation_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpointer": checkpointer,
+                "arq_pool": arq_pool,
+            }
+        }
         
-        # We invoke with empty input and the run-control config.
-        await graph_with_resources.ainvoke(None, config=run_control_config)
+        # We invoke with empty input and the structured config.
+        await graph_app_uncompiled.ainvoke(None, config=invocation_config)
 
 
 class WorkerSettings:
