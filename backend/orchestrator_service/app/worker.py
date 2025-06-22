@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from arq import ArqRedis
 from arq.connections import RedisSettings
@@ -64,7 +65,7 @@ async def start_turn(
 async def update_graph_with_message(ctx, thread_id: str, message_dict: dict):
     """
     Receives a message from a worker, fully re-hydrates the graph state,
-    and continues the graph execution.
+    and continues the graph execution, handling the checkpoint race condition.
     """
     logger.info("update_graph_with_message.start", thread_id=thread_id)
     arq_pool: ArqRedis = ctx["redis"]
@@ -84,28 +85,39 @@ async def update_graph_with_message(ctx, thread_id: str, message_dict: dict):
     async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
         config = {"configurable": {"thread_id": thread_id}}
         
-        # --- FIX: Fetch the checkpoint to get the current turn_id ---
-        checkpoint = await checkpointer.aget(config)
+        # --- FIX: Add a retry loop to handle the checkpoint race condition ---
+        checkpoint = None
+        for attempt in range(5):
+            checkpoint = await checkpointer.aget(config)
+            if checkpoint:
+                break
+            logger.warning("update_graph_with_message.checkpoint_not_found_retrying", thread_id=thread_id, attempt=attempt + 1)
+            await asyncio.sleep(0.5) # Wait 500ms before retrying
+
         if not checkpoint:
-            logger.error("update_graph_with_message.checkpoint_not_found", thread_id=thread_id)
+            logger.error("update_graph_with_message.checkpoint_not_found_failed", thread_id=thread_id)
             return
+        # --- END FIX ---
         
-        # Extract the turn_id from the loaded state
         turn_id = checkpoint.get("channel_values", {}).get("turn_id")
         if not turn_id:
             logger.error("update_graph_with_message.turn_id_not_found_in_checkpoint", thread_id=thread_id)
             return
 
-        # Construct the complete input payload
         input_payload = {
             "messages": [new_message],
             "group_members": members,
             "group_id": thread_id,
             "turn_id": turn_id,
         }
-        # --- END FIX ---
 
-        invocation_config = {"configurable": {**config["configurable"], "checkpointer": checkpointer, "arq_pool": arq_pool}}
+        invocation_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpointer": checkpointer,
+                "arq_pool": arq_pool,
+            }
+        }
         await graph_app_uncompiled.ainvoke(input_payload, config=invocation_config)
 
     logger.info("update_graph_with_message.invoked_continue", thread_id=thread_id)
