@@ -1,7 +1,10 @@
 from langchain_core.messages import BaseMessage, SystemMessage
+import logging
 from .tools import TOOL_REGISTRY
 from ..schemas.groups import GroupMemberRead
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead], alias: str) -> BaseMessage:
     """Encapsulates the logic for running a single agent's LLM call."""
@@ -48,6 +51,7 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
             raise ValueError(f"Unknown provider: {provider}")
 
         allowed_tools = [TOOL_REGISTRY[tool_name] for tool_name in member_config.tools or []]
+        logger.info(f"Running agent '{alias}' with tools: {allowed_tools}")
         llm_with_tools = llm.bind_tools(allowed_tools) if allowed_tools else llm
 
         response = await llm_with_tools.ainvoke(prompt)
