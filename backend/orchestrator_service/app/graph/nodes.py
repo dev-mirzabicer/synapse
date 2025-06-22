@@ -14,24 +14,20 @@ setup_logging()
 logger = structlog.get_logger(__name__)
 
 
-async def _persist_new_messages(state: GraphState, config: dict) -> None:
+async def _persist_new_messages(state: GraphState) -> None:
     """
-    Persists any new messages from the state to the database and broadcasts
-    them over a Redis pub/sub channel for real-time updates.
+    Persists any new messages from the state to the application's database
+    (Postgres) and broadcasts them over a Redis pub/sub channel.
+    
+    This function NO LONGER interacts with the LangGraph checkpointer.
     """
-    # CORRECT: Access runtime values from within the 'configurable' key.
-    configurable_config = config.get("configurable", {})
-    checkpointer = configurable_config.get("checkpointer")
-    if not checkpointer:
-        logger.warning("persist_new_messages.no_checkpointer")
-        return
-
     last_saved = state.get("last_saved_index", 0)
     new_messages = state["messages"][last_saved:]
     if not new_messages:
         return
 
     async with AsyncSessionLocal() as session:
+        # Use a single Redis client for all publications in this scope
         redis = Redis.from_url(settings.REDIS_URL)
         try:
             for msg in new_messages:
@@ -48,28 +44,25 @@ async def _persist_new_messages(state: GraphState, config: dict) -> None:
                     .on_conflict_do_nothing(index_elements=["id"])
                 )
                 await session.execute(stmt)
+                # Broadcast the message for real-time updates
                 await redis.publish(
                     f"group:{state['group_id']}",
                     json.dumps(msg.dict()),
                 )
             await session.commit()
+            logger.info("persist_new_messages.success", count=len(new_messages))
+        except Exception as e:
+            logger.error("persist_new_messages.error", error=str(e))
+            await session.rollback()
         finally:
             await redis.close()
-
-    # CORRECT: The checkpointer's update_state method needs the full config object
-    # that was passed to the node to identify the thread.
-    await checkpointer.update_state(
-        config,
-        {"last_saved_index": last_saved + len(new_messages)},
-    )
 
 
 async def dispatch_node(state: GraphState, config: dict) -> dict:
     """
-    A node that persists new messages and then dispatches jobs to the appropriate
-    execution workers based on the content of the last message in the state.
+    A node that persists new messages and then dispatches jobs to execution
+    workers. It updates the graph state by returning the new last_saved_index.
     """
-    # CORRECT: Access all runtime values from the nested 'configurable' dictionary.
     configurable_config = config.get("configurable", {})
     arq_pool = configurable_config.get("arq_pool")
     thread_id = configurable_config.get("thread_id")
@@ -77,10 +70,15 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
     if not arq_pool or not thread_id:
         raise ValueError("arq_pool or thread_id missing from runtime configuration.")
 
-    await _persist_new_messages(state, config)
+    # 1. Perform the side-effect of persisting messages
+    await _persist_new_messages(state)
 
+    # 2. Prepare state updates and actions
+    last_saved = state.get("last_saved_index", 0)
+    new_index = last_saved + len(state["messages"][last_saved:])
     last_message = state["messages"][-1]
 
+    # 3. Enqueue jobs for workers
     if tool_calls := getattr(last_message, "tool_calls", []):
         for call in tool_calls:
             logger.info("dispatch.tool", tool=call["name"], thread_id=thread_id)
@@ -105,21 +103,28 @@ async def dispatch_node(state: GraphState, config: dict) -> dict:
                 thread_id=thread_id,
                 _queue_name="execution_queue",
             )
-    return {}
+            
+    # 4. CORRECT: Return the state update for LangGraph to handle.
+    return {"last_saved_index": new_index}
 
 
 async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     """
     A terminal node that ensures any final messages are persisted before
-    the graph finishes its run. This is a crucial cleanup step.
+    the graph finishes. It returns the final state update.
     """
-    # CORRECT: Access thread_id from the nested 'configurable' dictionary.
     configurable_config = config.get("configurable", {})
     thread_id = configurable_config.get("thread_id")
     logger.info("sync_to_postgres.start", thread_id=thread_id)
 
-    # The graph passes the final state; we just need to persist from it.
-    await _persist_new_messages(state, config)
+    # 1. Persist any final messages
+    await _persist_new_messages(state)
+
+    # 2. Calculate the final index
+    last_saved = state.get("last_saved_index", 0)
+    new_index = last_saved + len(state["messages"][last_saved:])
 
     logger.info("sync_to_postgres.complete", thread_id=thread_id)
-    return {}
+    
+    # 3. CORRECT: Return the final state update.
+    return {"last_saved_index": new_index}
