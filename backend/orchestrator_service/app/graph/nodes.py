@@ -105,10 +105,9 @@ async def sync_to_postgres_node(state: GraphState, config: dict) -> dict:
     thread_id = config["configurable"]["thread_id"]
     logger.info("sync_to_postgres.start", thread_id=thread_id)
 
-    # Correctly get the full state from the checkpointer using a context manager
-    async with graph_checkpoint.aget(config) as full_state:
-        if full_state:
-            await _persist_new_messages(full_state, config)
+    # The graph passes the most current state to this node.
+    # We just need to persist any messages from this final state.
+    await _persist_new_messages(state, config)
 
     logger.info("sync_to_postgres.complete", thread_id=thread_id)
     return {}

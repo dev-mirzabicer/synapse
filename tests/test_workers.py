@@ -44,13 +44,19 @@ async def test_start_turn(monkeypatch):
         called['input'] = inp
         called['config'] = config
     monkeypatch.setattr(orch_worker.graph_app, 'ainvoke', fake_ainvoke)
-    orch_worker._arq_pool = 'pool'
     monkeypatch.setattr(orch_worker, 'AsyncSessionLocal', lambda: DummyAsyncSession())
-    await orch_worker.start_turn({}, 'gid', 'hi', 'uid', 'mid', 'tid')
+    
+    # Create a mock context with the expected 'redis' key
+    mock_pool = "pool"
+    mock_context = {"redis": mock_pool}
+
+    await orch_worker.start_turn(mock_context, 'gid', 'hi', 'uid', 'mid', 'tid')
+    
     assert called['input']['messages'][0].content == 'hi'
     assert called['input']['turn_id'] == 'tid'
-    assert called['input']['last_saved_index'] == 1
-    assert called['config']['arq_pool'] == 'pool'
+    # The initial last_saved_index should be 0 before the first persistence
+    assert called['input']['last_saved_index'] == 0
+    assert called['config']['arq_pool'] == mock_pool
 
 @pytest.mark.asyncio
 async def test_continue_turn(monkeypatch):
