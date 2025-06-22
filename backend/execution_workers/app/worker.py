@@ -1,9 +1,8 @@
 from arq import ArqRedis
 from arq.connections import RedisSettings
 import uuid
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-from langchain_core.messages import ToolMessage, SystemMessage, BaseMessage
-from langchain.load.dump import dumpd # <-- IMPORT THE CORRECT SERIALIZER
+from langchain.load.dump import dumpd
+from langchain_core.messages import ToolMessage, SystemMessage
 
 import structlog
 
@@ -21,7 +20,7 @@ logger = structlog.get_logger(__name__)
 async def run_tool(
     ctx, tool_name: str, tool_args: dict, thread_id: str, tool_call_id: str
 ):
-    """Executes a tool and updates the graph state with the result."""
+    """Executes a tool and enqueues the result for the orchestrator."""
     arq_pool: ArqRedis = ctx["redis"]
     logger.info("run_tool.start", tool=tool_name, thread_id=thread_id)
 
@@ -31,7 +30,8 @@ async def run_tool(
         logger.warning("run_tool.not_found", tool=tool_name)
     else:
         try:
-            result = tool_function.invoke(tool_args)
+            # Tools can be sync or async, invoke handles both.
+            result = await tool_function.ainvoke(tool_args)
         except Exception as e:
             result = f"Error executing tool '{tool_name}': {e}"
             logger.error("run_tool.error", tool=tool_name, error=str(e))
@@ -40,31 +40,22 @@ async def run_tool(
         content=str(result), name=tool_name, tool_call_id=tool_call_id
     )
     message.id = str(uuid.uuid4())
+    serialized_message = dumpd(message)
 
-    config = {"configurable": {"thread_id": thread_id}}
-    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpoint:
-        current_checkpoint = await checkpoint.aget(config)
-        if not current_checkpoint:
-            logger.error("run_tool.checkpoint_not_found", thread_id=thread_id)
-            return
-
-        # ROBUSTNESS FIX: Use dumpd for correct LangChain serialization
-        serialized_message = dumpd(message)
-        current_checkpoint["channel_values"]["messages"].append(serialized_message)
-        
-        await checkpoint.aput(config, current_checkpoint)
-        logger.info("run_tool.checkpoint_updated", thread_id=thread_id)
-
+    # Enqueue the result message for the orchestrator to handle state updates.
     await arq_pool.enqueue_job(
-        "continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue"
+        "update_graph_with_message",
+        thread_id=thread_id,
+        message_dict=serialized_message,
+        _queue_name="orchestrator_queue",
     )
-    logger.info("run_tool.enqueued", thread_id=thread_id)
+    logger.info("run_tool.enqueued", thread_id=thread_id, tool_name=tool_name)
 
 
 async def run_agent_llm(
     ctx, alias: str, messages_dict: list, group_members_dict: list, thread_id: str
 ):
-    """Runs an agent's LLM, updates state, and continues the orchestration."""
+    """Runs an agent's LLM and enqueues the response for the orchestrator."""
     arq_pool: ArqRedis = ctx["redis"]
     logger.info("run_agent.start", alias=alias, thread_id=thread_id)
 
@@ -74,34 +65,29 @@ async def run_agent_llm(
     response = await run_agent(messages, group_members, alias)
     response.id = str(uuid.uuid4())
 
-    config = {"configurable": {"thread_id": thread_id}}
-    async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpoint:
-        current_checkpoint = await checkpoint.aget(config)
-        if not current_checkpoint:
-            logger.error("run_agent_llm.checkpoint_not_found", thread_id=thread_id)
-            return
+    serialized_message = dumpd(response)
 
-        # ROBUSTNESS FIX: Use dumpd for correct LangChain serialization
-        serialized_message = dumpd(response)
-        current_checkpoint["channel_values"]["messages"].append(serialized_message)
-
-        await checkpoint.aput(config, current_checkpoint)
-        logger.info("run_agent_llm.checkpoint_updated", thread_id=thread_id)
-
-    await arq_pool.enqueue_job("continue_turn", thread_id=thread_id, _queue_name="orchestrator_queue")
+    # Enqueue the agent's response for the orchestrator to handle state updates.
+    await arq_pool.enqueue_job(
+        "update_graph_with_message",
+        thread_id=thread_id,
+        message_dict=serialized_message,
+        _queue_name="orchestrator_queue",
+    )
     logger.info("run_agent.enqueued", alias=alias, thread_id=thread_id)
 
 
 class WorkerSettings:
+    """ARQ worker settings for the execution workers."""
+
     functions = [run_tool, run_agent_llm]
     queue_name = "execution_queue"
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
 
     async def on_startup(ctx):
+        """Logs a startup message."""
         logger.info("worker.startup", redis_host=settings.REDIS_URL)
-        async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
-            await checkpointer.asetup()
-        logger.info("worker.startup.checkpointer_ready")
 
     async def on_shutdown(ctx):
+        """Logs a clean shutdown message."""
         logger.info("worker.shutdown")

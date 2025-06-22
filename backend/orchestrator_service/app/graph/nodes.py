@@ -51,6 +51,9 @@ async def _persist_new_messages(state: GraphState) -> dict:
         except Exception as e:
             logger.error("persist_new_messages.error", error=str(e))
             await session.rollback()
+            # --- FIX: Re-raise the exception to halt execution and fail the task ---
+            raise
+            # --- END FIX ---
         finally:
             await redis.close()
     
