@@ -15,6 +15,7 @@ The primary responsibilities of the backend include:
 - [Architecture Overview](#architecture-overview)
   - [Core Components](#core-components)
   - [Technology Stack](#technology-stack)
+- [API Endpoints Summary](#api-endpoints-summary)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Environment Configuration (`.env`)](#environment-configuration-env)
@@ -24,12 +25,13 @@ The primary responsibilities of the backend include:
   - [Code Changes & Hot Reloading](#code-changes--hot-reloading)
   - [Running Tests](#running-tests)
   - [Managing Database Schema (Alembic)](#managing-database-schema-alembic)
-  - [API Documentation](#api-documentation)
+  - [API Documentation (Swagger/ReDoc)](#api-documentation-swaggerredoc)
   - [Viewing Logs](#viewing-logs)
 - [Architectural Deep Dive](#architectural-deep-dive)
   - [The Request Lifecycle: A User's Message](#the-request-lifecycle-a-users-message)
   - [State Management with LangGraph](#state-management-with-langgraph)
   - [Real-time Communication via WebSockets](#real-time-communication-via-websockets)
+  - [Error Responses](#error-responses)
 - [Backend Directory Structure](#backend-directory-structure)
 - [Contributing](#contributing)
 
@@ -76,48 +78,19 @@ graph TD
 The backend is composed of three main services and a shared library:
 
 1.  **API Gateway (`api_gateway`)**
-    *   **Purpose:** The main public-facing entry point for all client interactions (e.g., frontend application). It handles HTTP requests and WebSocket connections.
-    *   **Responsibilities:**
-        *   User registration and login (JWT-based authentication).
-        *   CRUD operations for chat groups and their members.
-        *   Receiving user messages and initiating new conversation turns.
-        *   Managing WebSocket connections for real-time event streaming to clients.
-        *   Enqueuing tasks for the Orchestrator Service.
+    *   **Purpose:** The main public-facing entry point for all client interactions.
+    *   **Responsibilities:** User auth, CRUD for groups/agents, receiving messages, WebSocket management, task enqueuing.
     *   **Key Technologies:** FastAPI, Uvicorn, SQLAlchemy (Async), Alembic, ARQ (client), Pydantic.
-    *   **Entry Point:** `api_gateway/app/main.py` (FastAPI application)
-
 2.  **Orchestrator Service (`orchestrator_service`)**
-    *   **Purpose:** The "brain" of the multi-agent system. It manages the flow of conversation and coordinates agent actions using a stateful graph.
-    *   **Responsibilities:**
-        *   Consuming tasks from the `orchestrator_queue` (e.g., `start_turn`, `update_graph_with_message`).
-        *   Using LangGraph to define and execute a stateful conversation graph.
-        *   Routing messages between agents based on predefined logic and mentions.
-        *   Persisting messages to PostgreSQL and graph state to Redis (for checkpoints).
-        *   Dispatching tasks (agent LLM calls, tool executions) to Execution Workers.
-        *   Publishing new messages to Redis Pub/Sub for real-time client updates.
+    *   **Purpose:** Manages conversation flow using LangGraph.
+    *   **Responsibilities:** Consumes tasks, executes stateful graph, persists messages/state, dispatches tasks to Execution Workers, publishes to Redis Pub/Sub.
     *   **Key Technologies:** ARQ (worker), LangGraph, SQLAlchemy (Async), Pydantic.
-    *   **Entry Point:** `orchestrator_service/app/worker.py` (defines `WorkerSettings` for ARQ CLI)
-    *   **Graph Definition:** `orchestrator_service/app/graph/`
-
 3.  **Execution Workers (`execution_workers`)**
-    *   **Purpose:** Perform the actual "work" delegated by the Orchestrator, such as running an LLM or a tool.
-    *   **Responsibilities:**
-        *   Consuming tasks from the `execution_queue` (e.g., `run_tool`, `run_agent_llm`).
-        *   Interacting with various LLM providers (OpenAI, Gemini, Claude) via LangChain.
-        *   Executing registered tools (e.g., web search via Tavily).
-        *   Enqueuing results (agent responses, tool outputs) back to the Orchestrator Service.
+    *   **Purpose:** Perform LLM calls and tool executions.
+    *   **Responsibilities:** Consumes tasks, interacts with LLMs/tools, enqueues results back to Orchestrator.
     *   **Key Technologies:** ARQ (worker), LangChain, Pydantic.
-    *   **Entry Point:** `execution_workers/app/worker.py` (defines `WorkerSettings` for ARQ CLI)
-
 4.  **Shared Library (`shared`)**
-    *   **Purpose:** Contains common code, models, schemas, and utilities used across multiple backend services to promote DRY principles and consistency.
-    *   **Key Submodules:**
-        *   `agents/`: Prompts, agent running logic, tool definitions.
-        *   `core/`: Application configuration (`config.py`), logging setup (`logging.py`).
-        *   `db.py`: Database engine and asynchronous session management.
-        *   `models/`: SQLAlchemy ORM models (e.g., `User`, `ChatGroup`, `Message`).
-        *   `schemas/`: Pydantic schemas for data validation and API contracts.
-        *   `utils/`: Miscellaneous utility functions (e.g., message serialization/deserialization).
+    *   **Purpose:** Common code, models, schemas, utilities.
 
 ### Technology Stack
 
@@ -128,10 +101,46 @@ The backend is composed of three main services and a shared library:
 -   **ORM & Migrations:** SQLAlchemy (async support), Alembic
 -   **AI Orchestration & LLM Interaction:** LangChain, LangGraph
 -   **Data Validation & Settings Management:** Pydantic, Pydantic-Settings
--   **Caching, Messaging & Checkpointing Broker:** Redis (via `redis/redis-stack-server`)
+-   **Caching, Messaging & Checkpointing Broker:** Redis
 -   **Containerization:** Docker, Docker Compose
--   **Logging:** Structlog (for structured JSON logging)
--   **Authentication:** JWT (JSON Web Tokens) with Passlib for password hashing
+-   **Logging:** Structlog
+-   **Authentication:** JWT with Passlib
+
+## API Endpoints Summary
+
+This section provides a quick overview of the available API endpoints. For detailed request/response schemas and parameters, refer to the auto-generated API documentation (Swagger/ReDoc). All endpoints requiring authentication expect a JWT Bearer token in the `Authorization` header.
+
+**Authentication (`/auth`)**
+*   `POST /auth/register`: Register a new user.
+*   `POST /auth/login`: Log in and receive an access token.
+*   `GET /auth/me`: Get details of the currently authenticated user.
+
+**Chat Groups (`/groups`)**
+*   `POST /groups/`: Create a new chat group (including initial agents).
+*   `GET /groups/`: List all chat groups owned by the current user.
+*   `GET /groups/{group_id}`: Get detailed information about a specific chat group, including its members.
+*   `PUT /groups/{group_id}`: Update the name of a specific chat group.
+*   `DELETE /groups/{group_id}`: Delete a specific chat group and its associated data (members, messages).
+
+**Group Members (Agents) (`/groups/{group_id}/members`)**
+*   `POST /groups/{group_id}/members`: Add a new agent to a specific chat group.
+*   `PUT /groups/{group_id}/members/{member_id}`: Update an existing agent within a group.
+*   `DELETE /groups/{group_id}/members/{member_id}`: Remove an agent from a group.
+    *Note: The "Orchestrator" agent, automatically added to each group, cannot be modified or deleted via these endpoints.*
+
+**Messages (`/groups/{group_id}/messages`)**
+*   `POST /groups/{group_id}/messages`: Send a new message to a chat group, initiating a new turn.
+*   `GET /groups/{group_id}/messages`: Retrieve the message history for a chat group (supports pagination).
+
+**System Information (`/system`)**
+*   `GET /system/tools`: List all available tools that agents can use, including their descriptions and argument schemas.
+*   `GET /system/llm-options`: List available LLM providers and their models that can be configured for agents.
+
+**WebSockets (`/ws`)**
+*   `GET /ws/{group_id}`: Establish a WebSocket connection for real-time message streaming for a specific group. Requires token authentication via query parameter or `Authorization` header.
+
+**Health Check**
+*   `GET /health`: Basic health check endpoint.
 
 ## Getting Started
 
@@ -140,11 +149,11 @@ Follow these steps to get the entire backend stack running locally for developme
 ### Prerequisites
 
 -   [Docker](https://docs.docker.com/get-docker/)
--   [Docker Compose](https://docs.docker.com/compose/install/) (usually included with Docker Desktop)
+-   [Docker Compose](https://docs.docker.com/compose/install/)
 
 ### Environment Configuration (`.env`)
 
-All services are configured using environment variables, loaded from a `.env` file in the project root directory (the same directory as `docker-compose.yml`).
+All services are configured using environment variables, loaded from a `.env` file in the project root directory.
 
 1.  **Create a `.env` file** in the project root.
 2.  Populate it with the necessary configuration. Refer to `backend/shared/app/core/config.py` for all possible settings. A minimal example:
@@ -153,129 +162,77 @@ All services are configured using environment variables, loaded from a `.env` fi
     # .env
 
     # --- PostgreSQL Settings ---
-    # These must match the 'environment' section for the 'postgres' service in docker-compose.yml
     POSTGRES_DB=synapse
     POSTGRES_USER=synapse_user
     POSTGRES_PASSWORD=your_strong_postgres_password # CHANGE THIS!
     DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
     # --- Redis Settings ---
-    # This should match the 'redis' service name in docker-compose.yml
     REDIS_URL=redis://redis:6379/0
 
     # --- Security Settings ---
-    # Generate a strong key with: openssl rand -hex 32
     SECRET_KEY=your_very_strong_and_unique_secret_key_here # CHANGE THIS!
     ALGORITHM=HS256
-    ACCESS_TOKEN_EXPIRE_MINUTES=1440 # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
-    # --- LLM Provider API Keys (provide only those you intend to use) ---
+    # --- LLM Provider API Keys ---
     OPENAI_API_KEY=sk-your_openai_api_key
     GEMINI_API_KEY=your_google_gemini_api_key
     CLAUDE_API_KEY=sk-ant-your_anthropic_claude_api_key
-    TAVILY_API_KEY=tvly-your_tavily_api_key # For web_search tool
+    TAVILY_API_KEY=tvly-your_tavily_api_key
 
     # --- Logging ---
-    # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
     LOG_LEVEL=INFO
     ```
 
-    **Important:** Replace placeholder values (like passwords and API keys) with your actual credentials.
-
 ### Building and Running with Docker Compose
 
-This is the recommended way to run all backend services along with PostgreSQL and Redis.
-
-1.  **Navigate to the project root directory** (where `docker-compose.yml` is located).
-2.  **Build and start the services:**
-    ```bash
-    docker-compose up --build
-    ```
-    To run in detached mode (in the background):
-    ```bash
-    docker-compose up --build -d
-    ```
-3.  **Services will be available at:**
-    *   API Gateway: `http://localhost:8000`
-    *   PostgreSQL: `localhost:5432` (accessible from host, or `postgres:5432` from other containers)
-    *   Redis: `localhost:6379` (accessible from host, or `redis:6379` from other containers)
+1.  Navigate to the project root directory.
+2.  Build and start the services: `docker-compose up --build` (or `docker-compose up --build -d` for detached mode).
+3.  Services: API Gateway (`http://localhost:8000`), PostgreSQL (`localhost:5432`), Redis (`localhost:6379`).
 
 ### Database Migrations (Alembic)
 
-Database schema migrations are managed by Alembic. The migration scripts and configuration reside within the `api_gateway` service, as it's a primary interactor with the database schema, though models are defined in the `shared` library.
-
-**Initial Setup:** The first time you start the stack, or if the database is new, you need to apply the schema.
-1.  Ensure the services (especially `postgres`) are running: `docker-compose up`.
-2.  In a separate terminal, execute the Alembic upgrade command inside the `api_gateway` container:
-    ```bash
-    docker-compose exec api_gateway alembic upgrade head
-    ```
-    This applies all pending migrations up to the latest version.
+Migrations are managed by Alembic within the `api_gateway` service.
+1.  Ensure services are running: `docker-compose up`.
+2.  Apply migrations: `docker-compose exec api_gateway alembic upgrade head`.
 
 ## Development Workflow
 
 ### Code Changes & Hot Reloading
 
-The service directories (`api_gateway`, `orchestrator_service`, `execution_workers`, `shared`) are mounted as volumes in `docker-compose.yml`. This means code changes made on your host machine are reflected inside the containers.
--   The `api_gateway` (Uvicorn) is configured for hot reloading.
--   The ARQ workers (`orchestrator_service`, `execution_workers`) will also pick up changes on restart or if run with watch options (though the current Docker CMDs run them directly). For ARQ worker hot-reloading during active development, you might consider modifying the CMD in their Dockerfiles to use `watchfiles` or similar, or manually restart the specific service: `docker-compose restart orchestrator_service`.
-
+Service directories are mounted as volumes. `api_gateway` (Uvicorn) supports hot reloading. ARQ workers (`orchestrator_service`, `execution_workers`) may require a restart (`docker-compose restart <service_name>`) to pick up changes unless run with watch options.
 
 ### Running Tests
 
-Tests are located in the project root's `tests/` directory and are designed to be run on your host machine against the services running in Docker (or against mocked/in-memory components where appropriate).
-
-1.  **Install Test Dependencies:** From the project root directory:
+Tests are in `tests/`.
+1.  Install test dependencies (from project root):
     ```bash
     python -m pip install -r requirements.dev.txt
     python -m pip install -r backend/api_gateway/requirements.txt
-    python -m pip install -r backend/orchestrator_service/requirements.txt
-    python -m pip install -r backend/execution_workers/requirements.txt
+    # ... install requirements for orchestrator and execution_workers too
     ```
-2.  **Run Pytest:**
-    ```bash
-    pytest -q
-    ```
-    The `python-tests.yml` GitHub Actions workflow also follows this dependency installation pattern.
-
+2.  Run Pytest: `pytest -q`
 
 ### Managing Database Schema (Alembic)
 
 -   **Creating a New Migration:** After modifying SQLAlchemy models in `backend/shared/app/models/`:
-    1.  Ensure your models are correctly imported in `backend/api_gateway/alembic/env.py` (specifically, ensure `target_metadata = Base.metadata` includes all your models).
-    2.  Execute inside the `api_gateway` container:
-        ```bash
-        docker-compose exec api_gateway alembic revision --autogenerate -m "Your descriptive migration message"
-        ```
-    3.  Inspect the generated migration script in `backend/api_gateway/alembic/versions/` and adjust if necessary.
--   **Applying Migrations:**
-    ```bash
-    docker-compose exec api_gateway alembic upgrade head
-    ```
--   **Downgrading Migrations:** To revert the last applied migration:
-    ```bash
-    docker-compose exec api_gateway alembic downgrade -1
-    ```
-    To revert to a specific revision: `alembic downgrade <revision_id>`
+    1.  Ensure models are imported in `backend/api_gateway/alembic/env.py`.
+    2.  Execute: `docker-compose exec api_gateway alembic revision --autogenerate -m "Your migration message"`
+    3.  Inspect and adjust the generated script in `backend/api_gateway/alembic/versions/`.
+-   **Applying Migrations:** `docker-compose exec api_gateway alembic upgrade head`
+-   **Downgrading:** `docker-compose exec api_gateway alembic downgrade -1`
 
-### API Documentation
+### API Documentation (Swagger/ReDoc)
 
-Once the `api_gateway` service is running, interactive API documentation is available:
+Interactive API documentation is available when `api_gateway` is running:
 -   **Swagger UI:** `http://localhost:8000/docs`
 -   **ReDoc:** `http://localhost:8000/redoc`
 
 ### Viewing Logs
 
-To view logs from the running services:
--   For all services (aggregated and streaming):
-    ```bash
-    docker-compose logs -f
-    ```
--   For a specific service (e.g., `api_gateway`):
-    ```bash
-    docker-compose logs -f api_gateway
-    ```
-    Structured JSON logging (via Structlog) is configured, which can be helpful for parsing and analysis.
+-   All services: `docker-compose logs -f`
+-   Specific service: `docker-compose logs -f api_gateway`
 
 ## Architectural Deep Dive
 
@@ -283,119 +240,130 @@ To view logs from the running services:
 
 Understanding the flow of a single message from user to agent response:
 1.  **Ingestion (API Gateway):**
-    *   User sends a message (e.g., via HTTP POST to `/groups/{group_id}/messages`).
-    *   The API Gateway authenticates the user and validates the request data.
-    *   The initial user message is persisted to the PostgreSQL database (as a `Message` record).
-    *   A `start_turn` task is enqueued to the `orchestrator_queue` on Redis. The payload includes `group_id`, `message_content`, `user_id`, `message_id`, and a new `turn_id`.
-    *   The API Gateway returns a `202 Accepted` response.
+    *   User sends a message (e.g., `POST /groups/{group_id}/messages`).
+    *   API Gateway authenticates, validates, persists the initial user message to PostgreSQL.
+    *   A `start_turn` task is enqueued to `orchestrator_queue` on Redis. This task includes `group_id`, `message_content`, `user_id`, the persisted `message_id`, and a new unique `turn_id`.
+    *   The `turn_id` is crucial: it links the initial user message and all subsequent agent/tool messages generated in response to that specific user input.
+    *   API Gateway returns `202 Accepted`.
 2.  **Orchestration Begins (Orchestrator Service):**
-    *   An ARQ worker from the `orchestrator_service` picks up the `start_turn` task.
-    *   It fetches group member configurations from the database.
-    *   The LangGraph application is compiled with an `AsyncRedisSaver` checkpointer.
-    *   The graph is invoked with the initial state, including the user's message.
+    *   `orchestrator_service` picks up `start_turn`. Fetches group members.
+    *   LangGraph app is compiled with `AsyncRedisSaver` checkpointer.
+    *   Graph invoked with initial state (user message, group info, `turn_id`).
 3.  **Graph Execution & Routing (Orchestrator Service):**
-    *   The graph's `router_node` processes the current state (including new messages) and determines the next action (e.g., delegate to an agent, wait for tool, or end turn).
-    *   Messages are persisted to PostgreSQL via `_persist_new_messages`, which also publishes them to a Redis Pub/Sub channel (e.g., `group:<group_id>`).
+    *   `router_node` processes state, determines next action.
+    *   Messages (from user or agents) are persisted to PostgreSQL via `_persist_new_messages` (within `router_node` or `sync_to_postgres_node`). This function also publishes them to a Redis Pub/Sub channel (e.g., `group:<group_id>`).
 4.  **Dispatch to Execution (Orchestrator Service to Execution Workers):**
-    *   If an agent needs to run or a tool needs to be executed, the `dispatcher_node` enqueues a task (e.g., `run_agent_llm` or `run_tool`) to the `execution_queue` on Redis. The payload includes necessary context like messages, agent config, and the `thread_id` (which is the `group_id` for checkpointing).
-    *   The LangGraph then typically ends its current invocation, with its state automatically saved to Redis by the checkpointer.
+    *   If an agent or tool needs to run, `dispatcher_node` enqueues a task (e.g., `run_agent_llm`, `run_tool`) to `execution_queue`. Payload includes context and `thread_id` (which is `group_id`).
+    *   LangGraph invocation ends; state saved to Redis by checkpointer.
 5.  **Task Execution (Execution Workers):**
-    *   An ARQ worker from the `execution_workers` pool picks up the task.
-    *   It performs the LLM call (e.g., using LangChain with OpenAI, Gemini) or executes the specified tool.
+    *   `execution_workers` pick up task, perform LLM call or tool execution.
 6.  **Result Return (Execution Workers to Orchestrator Service):**
-    *   The worker packages the result (e.g., an `AIMessage` from an LLM or a `ToolMessage` from a tool) into a serializable dictionary.
-    *   It enqueues an `update_graph_with_message` task back to the `orchestrator_queue`, including the `thread_id` and the serialized message.
+    *   Worker packages result (e.g., `AIMessage`, `ToolMessage`), enqueues `update_graph_with_message` to `orchestrator_queue` with `thread_id` and serialized message.
 7.  **Graph Continuation (Orchestrator Service):**
-    *   The `orchestrator_service` picks up the `update_graph_with_message` task.
-    *   It deserializes the new message.
-    *   The LangGraph application (re-compiled with the checkpointer) is invoked again. The checkpointer loads the previous state for the `thread_id` from Redis, appends the new message, and the graph continues execution from where it left off (typically starting at the `router_node` again).
-    *   This loop (Orchestrator -> Persist/Publish -> Dispatcher -> Execution Worker -> Orchestrator) continues until the `router_node` determines the turn is complete (e.g., Orchestrator sends "TASK_COMPLETE") or requires further user input.
+    *   `orchestrator_service` picks up `update_graph_with_message`.
+    *   LangGraph app re-invoked; checkpointer loads state, appends new message. Graph continues.
+    *   This loop (Orchestrator -> Persist/Publish -> Dispatcher -> Worker -> Orchestrator) continues until the `router_node` determines the turn is complete for the current `turn_id` (e.g., Orchestrator sends "TASK_COMPLETE") or requires further user input.
 8.  **Real-time Update (API Gateway to Client):**
-    *   Throughout the process, whenever `_persist_new_messages` in the Orchestrator publishes a message to the Redis Pub/Sub channel, the API Gateway's WebSocket handlers (listening to these channels) receive the message and broadcast it to all connected clients for that specific group.
+    *   API Gateway's WebSocket handlers (listening to Redis Pub/Sub) receive new messages published by the Orchestrator and broadcast them to clients for that group.
 
 ### State Management with LangGraph
 
-The `orchestrator_service` uses LangGraph to manage complex, stateful multi-agent conversations.
--   **`GraphState` (`orchestrator_service/app/graph/state.py`):** A TypedDict defining the complete state of a conversation turn. It includes the message history, group configuration, active agents, turn count, etc.
--   **Nodes (`orchestrator_service/app/graph/nodes.py`):** Asynchronous Python functions that operate on the `GraphState`. Key nodes include:
-    *   `router_node`: Determines the next step, persists messages, and decides on next actors.
-    *   `dispatcher_node`: Enqueues tasks for execution workers based on `router_node`'s decision.
-    *   `sync_to_postgres_node`: Ensures final messages are persisted.
--   **Edges (`orchestrator_service/app/graph/graph.py`):** Define the control flow between nodes, including conditional logic (e.g., `should_dispatch_or_end`).
--   **Checkpointer (`AsyncRedisSaver`):** The LangGraph application (`workflow`) is compiled *at runtime* within the ARQ task functions (`start_turn`, `update_graph_with_message`) with an `AsyncRedisSaver` instance. This checkpointer automatically saves the full `GraphState` to Redis after each invocation, keyed by a `thread_id` (which is the `group_id`). When the graph is invoked again for the same `thread_id`, it loads the state from Redis, allowing the conversation to resume seamlessly across distributed task executions.
+The `orchestrator_service` uses LangGraph for stateful multi-agent conversations.
+-   **`GraphState`:** Defines the conversation turn's state (message history, group config, active agents, `turn_id`, etc.).
+-   **Nodes:** Asynchronous functions operating on `GraphState` (e.g., `router_node`, `dispatcher_node`).
+-   **Edges:** Define control flow.
+-   **Checkpointer (`AsyncRedisSaver`):** Saves `GraphState` to Redis after each invocation, keyed by `thread_id` (`group_id`), enabling seamless resumption across distributed tasks.
 
 ### Real-time Communication via WebSockets
 
-To provide a live chat experience, the backend pushes updates to clients:
-1.  A client establishes a WebSocket connection with the **API Gateway** at `/ws/{group_id}`, providing an auth token.
-2.  The API Gateway authenticates the user and verifies their access to the group.
-3.  If authorized, the Gateway subscribes to a Redis Pub/Sub channel specific to that group (e.g., `group:<uuid>`).
-4.  As the **Orchestrator Service** processes a turn, its `_persist_new_messages` function (within the `router_node` or `sync_to_postgres_node`) saves messages to PostgreSQL and simultaneously `PUBLISH`es a JSON representation of the new message to the corresponding Redis Pub/Sub channel.
-5.  The API Gateway's WebSocket listener for that channel receives the message from Redis and broadcasts it over the appropriate WebSocket connection to all connected clients for that group.
+1.  Client connects to API Gateway (`/ws/{group_id}`) with auth token.
+2.  API Gateway authenticates, verifies group access, subscribes to Redis Pub/Sub channel (e.g., `group:<uuid>`).
+3.  Orchestrator's `_persist_new_messages` function (in `router_node` or `sync_to_postgres_node`) saves messages to DB and `PUBLISH`es a JSON representation to Redis Pub/Sub.
+4.  API Gateway's WebSocket listener receives from Redis, broadcasts to connected clients.
 
-This Pub/Sub pattern effectively decouples the web-facing API Gateway from the internal message processing logic of the Orchestrator.
+**WebSocket Message Format:**
+When a new message is processed by the orchestrator and persisted, it's broadcasted to connected WebSocket clients for the relevant group. The JSON payload for each message is:
+```json
+{
+  "id": "message_uuid_string",        // Unique ID of the message
+  "turn_id": "turn_uuid_string",        // ID of the current conversation turn
+  "sender_alias": "string",             // Alias of the sender (e.g., "User", "Orchestrator", "AgentName", "ToolName")
+  "content": "string",                  // The message content
+  "timestamp": "iso_datetime_string",   // Timestamp of when the message was broadcast (UTC)
+  "meta": { ... }                       // Full LangChain message dictionary (can include tool_calls, etc.)
+  "parent_message_id": "uuid_string"    // Optional: ID of the parent message for threading
+}
+```
+
+### Error Responses
+
+The API uses standard HTTP status codes for errors.
+-   **`422 Unprocessable Entity`**: For validation errors (e.g., invalid input data). The response body will be a JSON object detailing the validation errors, as provided by FastAPI:
+    ```json
+    {
+      "detail": [
+        {
+          "loc": ["body", "field_name"],
+          "msg": "Validation error message",
+          "type": "validation_error_type"
+        }
+      ]
+    }
+    ```
+-   **Other Client Errors (400, 401, 403, 404, 409)** and **Server Errors (500+)**: The response body will typically be a JSON object with a "detail" key:
+    ```json
+    {
+      "detail": "A descriptive error message string"
+    }
+    ```
+    Examples:
+    *   `401 Unauthorized`: `{"detail": "Not authenticated"}` or `{"detail": "Could not validate credentials"}`
+    *   `403 Forbidden`: `{"detail": "Not authorized to access this resource"}`
+    *   `404 Not Found`: `{"detail": "Resource not found"}`
+    *   `409 Conflict`: `{"detail": "Resource conflict, e.g., alias already exists"}`
 
 ## Backend Directory Structure
-
+(This structure remains largely the same as initially provided, but the context of new files like `system.py` is now clearer)
 ```
 backend/
-├── api_gateway/            # Handles API requests, WebSockets, user auth
-│   ├── alembic/            # Database migration scripts and configuration
-│   │   ├── versions/       # Individual migration files
-│   │   └── env.py          # Alembic environment setup
-│   ├── app/                # FastAPI application code
-│   │   ├── api/            # API endpoint definitions
-│   │   │   ├── routers/    # Routers for different resources (auth, groups)
-│   │   │   └── websockets.py # WebSocket connection management and logic
-│   │   ├── core/           # Core utilities (ARQ client, security)
-│   │   └── main.py         # FastAPI app instantiation and event handlers
+├── api_gateway/
+│   ├── alembic/
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── routers/    # auth.py, groups.py, system.py (new)
+│   │   │   └── websockets.py
+│   │   ├── core/
+│   │   └── main.py
 │   ├── Dockerfile
 │   └── requirements.txt
-├── execution_workers/      # Executes agent LLM calls and tools
-│   ├── app/                # ARQ worker code
-│   │   └── worker.py       # ARQ task definitions (run_tool, run_agent_llm) & WorkerSettings
+├── execution_workers/
+│   ├── app/
+│   │   └── worker.py
 │   ├── Dockerfile
 │   └── requirements.txt
-├── orchestrator_service/   # Manages multi-agent conversation flow using LangGraph
-│   ├── app/                # ARQ worker and LangGraph code
-│   │   ├── graph/          # LangGraph definitions
-│   │   │   ├── checkpoint.py # Checkpointer setup
-│   │   │   ├── graph.py    # Graph structure (nodes, edges)
-│   │   │   ├── nodes.py    # Node implementation logic
-│   │   │   ├── router.py   # Routing logic for the graph
-│   │   │   └── state.py    # GraphState TypedDict definition
-│   │   ├── main.py         # Entry point for ARQ CLI to find WorkerSettings
-│   │   └── worker.py       # ARQ task definitions (start_turn, update_graph_with_message) & WorkerSettings
+├── orchestrator_service/
+│   ├── app/
+│   │   ├── graph/
+│   │   └── worker.py (and main.py)
 │   ├── Dockerfile
 │   └── requirements.txt
-└── shared/                 # Common code, models, schemas used by multiple services
+└── shared/
     └── app/
-        ├── agents/         # Agent prompts, runner logic, and tool definitions
-        │   ├── prompts.py
-        │   ├── runner.py
-        │   └── tools.py
-        ├── core/           # Shared configuration and logging
-        │   ├── config.py   # Pydantic settings management
-        │   └── logging.py  # Structlog setup
-        ├── models/         # SQLAlchemy ORM models
-        │   ├── base.py
-        │   └── chat.py
-        ├── schemas/        # Pydantic schemas for data validation and API contracts
-        │   ├── auth.py
-        │   ├── chat.py
-        │   └── groups.py
-        ├── utils/          # Common utility functions
-        │   └── message_serde.py # Message serialization/deserialization
-        └── db.py           # Database engine and async session management
+        ├── agents/
+        ├── core/
+        ├── models/
+        ├── schemas/        # auth.py, chat.py, groups.py, system.py (new)
+        ├── utils/
+        └── db.py
 ```
 
 ## Contributing
 
 When contributing to the backend:
-- Adhere to Python best practices (e.g., PEP 8, type hinting).
+- Adhere to Python best practices.
 - Write clear, concise, and well-documented code.
-- Update or add Pydantic schemas for any API or data structure changes.
-- If database models are changed, generate and test Alembic migrations.
-- Add unit or integration tests for new features or bug fixes (tests are in the project root's `tests/` directory).
-- Ensure all services build and run correctly with Docker Compose.
-- Keep this README updated if architectural changes are made.
+- Update/add Pydantic schemas for API/data changes.
+- Generate and test Alembic migrations for DB model changes.
+- Add tests for new features/bug fixes.
+- Ensure services build and run correctly with Docker Compose.
+- Keep this README updated.
