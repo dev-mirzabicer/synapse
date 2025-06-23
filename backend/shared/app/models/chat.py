@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, func, ForeignKey, JSON, Text
+from sqlalchemy import String, DateTime, func, ForeignKey, JSON, Text, Float # Added Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
@@ -20,7 +20,7 @@ class GroupMember(Base):
     tools: Mapped[list[str] | None] = mapped_column(JSON)
     provider: Mapped[str] = mapped_column(String(50), default="openai")
     model: Mapped[str] = mapped_column(String(100), default="gpt-4o")
-    temperature: Mapped[float] = mapped_column(default=0.1)
+    temperature: Mapped[float] = mapped_column(Float, default=0.1) # Ensured Float type
 
     group: Mapped["ChatGroup"] = relationship(back_populates="members")
 
@@ -34,8 +34,12 @@ class ChatGroup(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     # Relationships
-    members: Mapped[list["GroupMember"]] = relationship(back_populates="group")
-    messages: Mapped[list["Message"]] = relationship(back_populates="group")
+    members: Mapped[list["GroupMember"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
 
 
 class Message(Base):
@@ -45,9 +49,6 @@ class Message(Base):
     turn_id: Mapped[uuid.UUID] = mapped_column(index=True)
     sender_alias: Mapped[str] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(String)
-    # Optional pointer to another message to support threaded conversations.
-    # Not currently used by the orchestration loop but reserved for future
-    # features like message trees or reply chains.
     parent_message_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("messages.id")
     )

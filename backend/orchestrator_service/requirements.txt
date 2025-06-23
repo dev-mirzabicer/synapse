@@ -9,3 +9,4 @@ langgraph==0.4.8
 langgraph-checkpoint==2.1.0
 langgraph-checkpoint-redis
 structlog
+tavily-python

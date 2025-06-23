@@ -5,7 +5,9 @@ set -e
 rm -rf ./backend/api_gateway/alembic/versions/*
 
 docker-compose down -v
-docker compose build --no-cache orchestrator_service
+# rebuild all images without cache
+docker-compose build --no-cache
+# Start the containers in detached mode
 docker-compose up -d
 # Wait for the database to be ready
 sleep 10
