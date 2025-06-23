@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.api.routers import auth, groups
-from app.api import websockets  # Import the new websockets module
+from app.api.routers import system # Import the new system router
+from app.api import websockets
 from app.core.arq_client import init_arq_pool, close_arq_pool
 from shared.app.core.logging import setup_logging
 
@@ -21,9 +22,10 @@ async def on_shutdown() -> None:
 
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(groups.router, prefix="/groups", tags=["Chat Groups"])
+app.include_router(system.router, prefix="/system", tags=["System Information"]) # Include system router
 app.include_router(
     websockets.router, tags=["WebSockets"]
-)  # Include the WebSocket router
+)
 
 
 @app.get("/health", tags=["Status"])

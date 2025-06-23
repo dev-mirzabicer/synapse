@@ -1,5 +1,6 @@
 import uuid
 from pydantic import BaseModel, Field
+from datetime import datetime # Added for GroupDetailRead
 
 
 class AgentConfigCreate(BaseModel):
@@ -31,11 +32,22 @@ class GroupMemberRead(BaseModel):
     alias: str = Field(..., min_length=1, max_length=100)
     system_prompt: str
     tools: list[str] | None = []
-    provider: str = "openai"
-    model: str = "gpt-4o"
-    temperature: float = 0.1
+    provider: str
+    model: str
+    temperature: float
 
     class Config:
         from_attributes = True
 
 
+class GroupDetailRead(BaseModel):
+    """Detailed information about a chat group, including its members."""
+    id: uuid.UUID
+    name: str
+    owner_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+    members: list[GroupMemberRead]
+
+    class Config:
+        from_attributes = True
