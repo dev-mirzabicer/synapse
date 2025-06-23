@@ -23,11 +23,11 @@ redis_stub.RedisSaver = type(
 )
 sys.modules.setdefault("langgraph.checkpoint.redis", redis_stub)
 
-from orchestrator_service.app.graph import graph, nodes
-from orchestrator_service.app import worker as orch_worker
-from execution_workers.app import worker as exec_worker
-from shared.app.agents import runner
-from shared.app.schemas.groups import GroupMemberRead
+from backend.orchestrator_service.app.graph import graph, nodes
+from backend.orchestrator_service.app import worker as orch_worker
+from backend.execution_workers.app import worker as exec_worker
+from backend.shared.app.agents import runner
+from backend.shared.app.schemas.groups import GroupMemberRead
 
 @pytest.mark.asyncio
 async def test_graph_basic_flow(monkeypatch):
