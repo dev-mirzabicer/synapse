@@ -220,6 +220,7 @@ The service directories (`api_gateway`, `orchestrator_service`, `execution_worke
 -   The `api_gateway` (Uvicorn) is configured for hot reloading.
 -   The ARQ workers (`orchestrator_service`, `execution_workers`) will also pick up changes on restart or if run with watch options (though the current Docker CMDs run them directly). For ARQ worker hot-reloading during active development, you might consider modifying the CMD in their Dockerfiles to use `watchfiles` or similar, or manually restart the specific service: `docker-compose restart orchestrator_service`.
 
+
 ### Running Tests
 
 Tests are located in the project root's `tests/` directory and are designed to be run on your host machine against the services running in Docker (or against mocked/in-memory components where appropriate).
@@ -236,6 +237,7 @@ Tests are located in the project root's `tests/` directory and are designed to b
     pytest -q
     ```
     The `python-tests.yml` GitHub Actions workflow also follows this dependency installation pattern.
+
 
 ### Managing Database Schema (Alembic)
 
