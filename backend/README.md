@@ -22,7 +22,6 @@ The primary responsibilities of the backend include:
   - [Database Migrations (Alembic)](#database-migrations-alembic)
 - [Development Workflow](#development-workflow)
   - [Code Changes & Hot Reloading](#code-changes--hot-reloading)
-  - [Running Tests](#running-tests)
   - [Managing Database Schema (Alembic)](#managing-database-schema-alembic)
   - [API Documentation](#api-documentation)
   - [Viewing Logs](#viewing-logs)
@@ -220,22 +219,6 @@ The service directories (`api_gateway`, `orchestrator_service`, `execution_worke
 -   The `api_gateway` (Uvicorn) is configured for hot reloading.
 -   The ARQ workers (`orchestrator_service`, `execution_workers`) will also pick up changes on restart or if run with watch options (though the current Docker CMDs run them directly). For ARQ worker hot-reloading during active development, you might consider modifying the CMD in their Dockerfiles to use `watchfiles` or similar, or manually restart the specific service: `docker-compose restart orchestrator_service`.
 
-### Running Tests
-
-Tests are located in the project root's `tests/` directory and are designed to be run on your host machine against the services running in Docker (or against mocked/in-memory components where appropriate).
-
-1.  **Install Test Dependencies:** From the project root directory:
-    ```bash
-    python -m pip install -r requirements.dev.txt
-    python -m pip install -r backend/api_gateway/requirements.txt
-    python -m pip install -r backend/orchestrator_service/requirements.txt
-    python -m pip install -r backend/execution_workers/requirements.txt
-    ```
-2.  **Run Pytest:**
-    ```bash
-    pytest -q
-    ```
-    The `python-tests.yml` GitHub Actions workflow also follows this dependency installation pattern.
 
 ### Managing Database Schema (Alembic)
 
