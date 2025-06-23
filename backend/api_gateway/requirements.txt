@@ -61,3 +61,4 @@ passlib[bcrypt] # For password hashing
 asyncpg
 pydantic[email]
 python-multipart
+tavily-python
