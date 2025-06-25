@@ -3,12 +3,12 @@ import json
 import structlog
 from arq import ArqRedis
 from arq.connections import RedisSettings
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, BaseMessage
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from sqlalchemy import select
+import uuid 
 
-# Import the graph DEFINITION, not a pre-compiled app
-from graph.graph import workflow
+from graph.graph import workflow 
 from shared.app.core.config import settings
 from shared.app.core.logging import setup_logging
 from shared.app.db import AsyncSessionLocal
@@ -19,9 +19,8 @@ from shared.app.utils.message_serde import deserialize_messages
 setup_logging()
 logger = structlog.get_logger(__name__)
 
-# --- Constants for Redis keys ---
 GATHER_KEY_PREFIX = "synapse:gather"
-GATHER_TIMEOUT_SECONDS = 300  # 5 minutes
+GATHER_TIMEOUT_SECONDS = 300
 
 
 async def start_turn(
@@ -32,27 +31,43 @@ async def start_turn(
     message_id: str,
     turn_id: str,
 ):
-    """Starts a new turn initiated by a user."""
-    logger.info("start_turn.initiated", group_id=group_id, turn_id=turn_id)
+    logger.info(
+        "start_turn.initiated_by_user_message",
+        group_id=group_id,
+        user_id=user_id,
+        user_message_id=message_id,
+        turn_id=turn_id,
+        message_content_snippet=message_content[:100]+"..."
+    )
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(GroupMember).where(GroupMember.group_id == group_id)
         )
-        members = [GroupMemberRead.model_validate(m) for m in result.scalars().all()]
+        members_orm = result.scalars().all()
+        if not members_orm:
+            logger.error("start_turn.no_group_members_found_in_db", group_id=group_id, turn_id=turn_id)
+            # Consider how to handle this: raise error, or let graph handle empty members?
+            # For now, log and continue, graph might handle it or fail.
+            members_schema = []
+        else:
+            members_schema = [GroupMemberRead.model_validate(m) for m in members_orm]
+        
+        logger.debug("start_turn.loaded_group_members", group_id=group_id, turn_id=turn_id, member_aliases=[m.alias for m in members_schema], member_count=len(members_schema))
 
     user_msg = HumanMessage(content=message_content)
-    user_msg.id = message_id
+    user_msg.id = message_id 
     user_msg.name = "User"
 
     graph_input = {
         "messages": [user_msg],
         "group_id": group_id,
-        "group_members": members,
+        "group_members": members_schema,
         "turn_count": 0,
         "last_saved_index": 0,
         "turn_id": turn_id,
     }
+    logger.debug("start_turn.initial_graph_input", group_id=group_id, turn_id=turn_id, graph_input_details={"message_id": message_id, "turn_id": turn_id, "group_members_count": len(members_schema)})
 
     arq_pool: ArqRedis = ctx["redis"]
 
@@ -60,127 +75,164 @@ async def start_turn(
         graph_app = workflow.compile(checkpointer=checkpointer)
         invocation_config = {
             "configurable": {
-                "thread_id": group_id,
+                "thread_id": group_id, 
                 "arq_pool": arq_pool,
             }
         }
+        logger.info("start_turn.invoking_graph_app.ainvoke", group_id=group_id, turn_id=turn_id, thread_id_for_graph=group_id)
         await graph_app.ainvoke(graph_input, config=invocation_config)
-    logger.info("start_turn.complete", group_id=group_id, turn_id=turn_id)
+    
+    logger.info("start_turn.graph_invocation_complete", group_id=group_id, turn_id=turn_id)
 
 
 async def process_worker_result(
     ctx, thread_id: str, message_dict: dict, gathering_id: str | None = None
 ):
-    """
-    Receives a result from an execution worker.
-    If it's part of a parallel dispatch (has a gathering_id), it collects results.
-    Once all results are collected, or if it's a single result, it updates the graph.
-    """
+    # Attempt to get sender from message_dict for logging
+    sender_alias_log = "N/A"
+    message_type_log = message_dict.get("type", "N/A")
+    if message_type_log == "constructor" and "kwargs" in message_dict and "name" in message_dict["kwargs"]:
+        sender_alias_log = message_dict["kwargs"]["name"]
+    elif "name" in message_dict: # Fallback for other serialized formats if any
+        sender_alias_log = message_dict["name"]
+    
+    message_id_log = "N/A"
+    if message_type_log == "constructor" and "kwargs" in message_dict and "id" in message_dict["kwargs"] and message_dict["kwargs"]["id"]:
+         message_id_log = str(message_dict["kwargs"]["id"][-1]) if isinstance(message_dict["kwargs"]["id"], list) else str(message_dict["kwargs"]["id"]) # Langchain id can be a list
+    elif "id" in message_dict and message_dict["id"]: # Fallback
+         message_id_log = str(message_dict["id"][-1]) if isinstance(message_dict["id"], list) else str(message_dict["id"])
+
+
     logger.info(
-        "process_worker_result.received",
+        "process_worker_result.entry",
         thread_id=thread_id,
+        message_sender_alias=sender_alias_log,
+        message_id_approx=message_id_log, # Approximate, as ID structure can vary
+        message_type=message_type_log,
         gathering_id=gathering_id,
     )
+    logger.debug("process_worker_result.received_message_dict_preview", thread_id=thread_id, message_dict_preview=str(message_dict)[:250]+"...")
 
     if not gathering_id:
-        # This is a single, non-parallel response (e.g., from a tool call or single agent dispatch).
-        # We can update the graph immediately.
-        logger.info("process_worker_result.single_dispatch", thread_id=thread_id)
+        logger.info("process_worker_result.handling_single_dispatch_result", thread_id=thread_id, message_id_approx=message_id_log)
         await update_graph_with_messages(
-            ctx, thread_id=thread_id, messages_dict=[message_dict]
+            ctx, thread_id=thread_id, messages_dict_list=[message_dict]
         )
         return
 
-    # --- Collector Logic for Parallel Responses ---
     arq_pool: ArqRedis = ctx["redis"]
     gather_hash_key = f"{GATHER_KEY_PREFIX}:{gathering_id}"
     gather_list_key = f"{gather_hash_key}:messages"
+    logger.debug("process_worker_result.collector_redis_keys", gather_hash_key=gather_hash_key, gather_list_key=gather_list_key, thread_id=thread_id)
 
-    # Atomically store the message and increment the received count
+    serialized_for_redis_list = json.dumps(message_dict)
     pipe = arq_pool.pipeline()
-    pipe.rpush(gather_list_key, json.dumps(message_dict))
+    pipe.rpush(gather_list_key, serialized_for_redis_list)
     pipe.hincrby(gather_hash_key, "received", 1)
-    pipe.expire(gather_hash_key, GATHER_TIMEOUT_SECONDS)  # Add TTL for safety
     pipe.expire(gather_list_key, GATHER_TIMEOUT_SECONDS)
-    _, received_count, _, _ = await pipe.execute()
+    pipe.expire(gather_hash_key, GATHER_TIMEOUT_SECONDS)
+    
+    _, received_count, _, _ = await pipe.execute() # list_len, received_count, expire_ok1, expire_ok2
+    logger.debug(
+        "process_worker_result.collector_pipeline_executed",
+        gathering_id=gathering_id, thread_id=thread_id,
+        current_received_count_from_hincrby=received_count
+    )
 
-    # Get the expected count
     expected_count_str = await arq_pool.hget(gather_hash_key, "expected")
     if not expected_count_str:
         logger.error(
-            "process_worker_result.missing_expected_count",
-            gathering_id=gathering_id,
-            thread_id=thread_id,
+            "process_worker_result.collector_missing_expected_count_in_redis",
+            gathering_id=gathering_id, thread_id=thread_id, gather_hash_key=gather_hash_key
         )
-        # Failsafe: process what we have to avoid losing the message.
+        logger.warn("process_worker_result.collector_failsafe_processing_single_message", gathering_id=gathering_id, thread_id=thread_id, message_id_approx=message_id_log)
         await update_graph_with_messages(
-            ctx, thread_id=thread_id, messages_dict=[message_dict]
+            ctx, thread_id=thread_id, messages_dict_list=[message_dict]
         )
         return
 
     expected_count = int(expected_count_str)
     logger.info(
-        "process_worker_result.collection_status",
-        gathering_id=gathering_id,
-        received=received_count,
-        expected=expected_count,
+        "process_worker_result.collection_status_update",
+        gathering_id=gathering_id, thread_id=thread_id,
+        received_now=received_count, expected=expected_count, message_id_approx=message_id_log
     )
 
     if received_count >= expected_count:
-        # We are the "collector" job, the last one to arrive.
         logger.info(
-            "process_worker_result.collection_complete",
-            gathering_id=gathering_id,
-            thread_id=thread_id,
+            "process_worker_result.collection_complete_all_messages_received",
+            gathering_id=gathering_id, thread_id=thread_id,
+            received_count=received_count, expected_count=expected_count
         )
 
-        # Atomically get all messages and delete the keys
         pipe = arq_pool.pipeline()
         pipe.lrange(gather_list_key, 0, -1)
         pipe.delete(gather_list_key)
         pipe.delete(gather_hash_key)
-        all_message_strs, _, _ = await pipe.execute()
+        all_message_strs_from_redis, _, _ = await pipe.execute() # messages_list, del_ok1, del_ok2
+        logger.debug(
+            "process_worker_result.collector_cleanup_redis",
+            gathering_id=gathering_id, thread_id=thread_id,
+            retrieved_messages_count=len(all_message_strs_from_redis) if all_message_strs_from_redis else 0,
+        )
 
-        all_messages_dict = [json.loads(m) for m in all_message_strs]
+        if not all_message_strs_from_redis:
+            logger.error("process_worker_result.collector_no_messages_retrieved_from_list_after_completion_signal", gathering_id=gathering_id, thread_id=thread_id, gather_list_key=gather_list_key)
+            return
 
-        # Update the graph with the complete batch of messages
+        all_messages_as_dicts = [json.loads(m_str) for m_str in all_message_strs_from_redis]
         await update_graph_with_messages(
-            ctx, thread_id=thread_id, messages_dict=all_messages_dict
+            ctx, thread_id=thread_id, messages_dict_list=all_messages_as_dicts
         )
     else:
-        # Not all results are in yet. This job's work is done.
         logger.info(
-            "process_worker_result.waiting_for_more",
-            gathering_id=gathering_id,
-            thread_id=thread_id,
+            "process_worker_result.collection_waiting_for_more_messages",
+            gathering_id=gathering_id, thread_id=thread_id,
+            received_so_far=received_count, expected_total=expected_count
         )
 
 
-async def update_graph_with_messages(ctx, thread_id: str, messages_dict: list[dict]):
-    """
-    Receives a list of messages, adds them to the graph's state,
-    and continues the graph execution.
-    """
+async def update_graph_with_messages(ctx, thread_id: str, messages_dict_list: list[dict]):
+    sender_aliases_in_batch = []
+    for msg_dict in messages_dict_list:
+        alias = "N/A"
+        msg_type = msg_dict.get("type", "N/A")
+        if msg_type == "constructor" and "kwargs" in msg_dict and "name" in msg_dict["kwargs"]:
+            alias = msg_dict["kwargs"]["name"]
+        elif "name" in msg_dict:
+            alias = msg_dict["name"]
+        sender_aliases_in_batch.append(alias)
+
     logger.info(
-        "update_graph_with_messages.received",
+        "update_graph_with_messages.entry",
         thread_id=thread_id,
-        message_count=len(messages_dict),
+        num_messages_to_add=len(messages_dict_list),
+        sender_aliases_in_batch=sender_aliases_in_batch
     )
+    logger.debug("update_graph_with_messages.messages_dict_list_preview", thread_id=thread_id, messages_preview=[str(m)[:100]+"..." for m in messages_dict_list])
+
     arq_pool: ArqRedis = ctx["redis"]
 
     try:
-        new_messages = deserialize_messages(messages_dict)
+        new_lc_messages: list[BaseMessage] = deserialize_messages(messages_dict_list)
+        message_ids_deserialized = [getattr(m, 'id', 'N/A') for m in new_lc_messages]
+        logger.debug(
+            "update_graph_with_messages.deserialized_lc_messages", 
+            thread_id=thread_id, 
+            deserialized_message_types=[type(m).__name__ for m in new_lc_messages], 
+            deserialized_message_ids=message_ids_deserialized
+        )
     except Exception as e:
         logger.error(
-            "update_graph_with_messages.deserialization_error", error=str(e), exc_info=True
+            "update_graph_with_messages.deserialization_error",
+            thread_id=thread_id, error=str(e),
+            messages_dict_list_problematic_preview=[str(m)[:100]+"..." for m in messages_dict_list],
+            exc_info=True
         )
         return
 
-    # The input is the new list of messages. LangGraph will use the checkpointer
-    # to load the previous state and append these messages.
-    input_payload = {
-        "messages": new_messages,
-    }
+    input_payload_for_graph = {"messages": new_lc_messages}
+    logger.debug("update_graph_with_messages.input_payload_for_graph_ainvoke", thread_id=thread_id, payload_details={"messages_to_add_count": len(new_lc_messages), "first_message_id_to_add": message_ids_deserialized[0] if message_ids_deserialized else "N/A"})
 
     async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
         graph_app = workflow.compile(checkpointer=checkpointer)
@@ -190,24 +242,25 @@ async def update_graph_with_messages(ctx, thread_id: str, messages_dict: list[di
                 "arq_pool": arq_pool,
             }
         }
-        # `ainvoke` will now correctly load the checkpoint, merge the new
-        # messages, run the graph, and save the resulting state.
-        await graph_app.ainvoke(input_payload, config=invocation_config)
+        logger.info("update_graph_with_messages.invoking_graph_app.ainvoke_to_continue", thread_id=thread_id)
+        await graph_app.ainvoke(input_payload_for_graph, config=invocation_config)
 
-    logger.info("update_graph_with_messages.invoked_continue", thread_id=thread_id)
+    logger.info("update_graph_with_messages.graph_continue_invocation_complete", thread_id=thread_id)
 
 
 class WorkerSettings:
-    functions = [start_turn, process_worker_result]  # MODIFIED
+    functions = [start_turn, process_worker_result]
     queue_name = "orchestrator_queue"
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
 
     async def on_startup(ctx):
-        logger.info("worker.startup", redis_host=settings.REDIS_URL)
-        # Setup checkpointer tables/indices if they don't exist
-        async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
-            await checkpointer.asetup()
-        logger.info("worker.startup.checkpointer_ready")
+        logger.info("orchestrator_worker.startup", redis_host=str(WorkerSettings.redis_settings.host), queue_name=WorkerSettings.queue_name, functions_registered=len(WorkerSettings.functions))
+        try:
+            async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
+                await checkpointer.asetup()
+            logger.info("orchestrator_worker.startup.checkpointer_setup_verified")
+        except Exception as e:
+            logger.error("orchestrator_worker.startup.checkpointer_setup_failed", error=str(e), exc_info=True)
 
     async def on_shutdown(ctx):
-        logger.info("worker.shutdown")
+        logger.info("orchestrator_worker.shutdown", queue_name=WorkerSettings.queue_name)
