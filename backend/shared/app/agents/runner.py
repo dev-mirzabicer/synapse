@@ -13,8 +13,7 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
         if not member_config:
             raise ValueError(f"Configuration not found for agent alias: {alias}")
 
-        # Inject available member aliases into the system prompt for context.
-        available_aliases = ", ".join([m.alias for m in members if m.alias != alias])
+        available_aliases = ", ".join([f"@[{m.alias}]" for m in members if m.alias != alias])
         prompt_template = member_config.system_prompt + f"\n\nAvailable team members for delegation: {available_aliases}."
 
         prompt = [SystemMessage(content=prompt_template), *messages]
@@ -25,28 +24,13 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
 
         if provider == "openai":
             from langchain_openai import ChatOpenAI
-
-            llm = ChatOpenAI(
-                model=model,
-                temperature=temperature,
-                openai_api_key=settings.OPENAI_API_KEY,
-            )
+            llm = ChatOpenAI(model=model, temperature=temperature, openai_api_key=settings.OPENAI_API_KEY)
         elif provider == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
-
-            llm = ChatGoogleGenerativeAI(
-                model=model,
-                temperature=temperature,
-                google_api_key=settings.GEMINI_API_KEY,
-            )
+            llm = ChatGoogleGenerativeAI(model=model, temperature=temperature, google_api_key=settings.GEMINI_API_KEY)
         elif provider == "claude":
             from langchain_anthropic import ChatAnthropic
-
-            llm = ChatAnthropic(
-                model=model,
-                temperature=temperature,
-                anthropic_api_key=settings.CLAUDE_API_KEY,
-            )
+            llm = ChatAnthropic(model=model, temperature=temperature, anthropic_api_key=settings.CLAUDE_API_KEY)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -55,8 +39,17 @@ async def run_agent(messages: list[BaseMessage], members: list[GroupMemberRead],
         llm_with_tools = llm.bind_tools(allowed_tools) if allowed_tools else llm
 
         response = await llm_with_tools.ainvoke(prompt)
-        # Assign the sender's name to the response for easier routing later.
+        
+        # Proactively normalize message content to be a string.
+        if isinstance(response.content, list):
+            # Intelligently join all parts, converting them to string representations.
+            response.content = "\n\n".join(
+                part.get("text", str(part)) if isinstance(part, dict) else str(part)
+                for part in response.content
+            )
+
         response.name = alias
         return response
     except Exception as e:
+        logger.error(f"Agent '{alias}' failed", exc_info=True)
         return SystemMessage(content=f"Agent '{alias}' failed: {e}", name="system_error")
