@@ -7,42 +7,51 @@ import structlog
 
 from ..core.config import settings
 from ..schemas.groups import GroupMemberRead
-from .prompts import AGENT_BASE_PROMPT, ORCHESTRATOR_PROMPT
+from .prompts import AGENT_BASE_PROMPT, ORCHESTRATOR_PROMPT, STOP_SEQUENCE
 from .tools import TOOL_REGISTRY
 
 logger = structlog.get_logger(__name__)
 
 
-def _normalize_llm_content(content: Union[str, List[Dict[str, any]]]) -> str:
+def _normalize_and_clean_llm_content(content: Union[str, List[Union[str, Dict[str, any]]]]) -> str:
     """
-    Robustly normalizes LLM content. It handles:
+    Robustly normalizes LLM content and cleans the stop sequence. It handles:
     - Simple string content.
-    - Multi-part content (common with vision models or Gemini), extracting and joining text parts.
+    - A list of strings.
+    - Multi-part content (e.g., from Gemini), extracting and joining text parts.
+    - Strips the STOP_SEQUENCE from the final output.
     """
+    normalized_content = ""
     if isinstance(content, str):
-        return content
-    
-    if isinstance(content, list):
+        normalized_content = content
+    elif isinstance(content, list):
         text_parts = []
         for part in content:
-            if isinstance(part, dict) and "text" in part:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
                 text_parts.append(str(part["text"]))
         
         if not text_parts:
             logger.warn("run_agent.normalize_content.no_text_parts_found", content_received=content)
-            return "" # Return empty string if no text parts found
-            
-        normalized_content = "\n".join(text_parts)
-        if len(text_parts) > 1:
-            logger.info(
-                "run_agent.normalize_content.joined_multi_part_response",
-                parts_count=len(text_parts),
-                final_content_preview=normalized_content[:100]+"..."
-            )
-        return normalized_content
+            normalized_content = str(content) if content else ""
+        else:
+            normalized_content = "\n".join(text_parts)
+            if len(text_parts) > 1:
+                logger.info(
+                    "run_agent.normalize_content.joined_multi_part_response",
+                    parts_count=len(text_parts),
+                    final_content_preview=normalized_content[:100]+"..."
+                )
+    else:
+        logger.warn("run_agent.normalize_content.unhandled_content_type", content_type=type(content).__name__, content_preview=str(content)[:100]+"...")
+        normalized_content = str(content)
 
-    logger.warn("run_agent.normalize_content.unhandled_content_type", content_type=type(content).__name__, content_preview=str(content)[:100]+"...")
-    return str(content)
+    # Clean the stop sequence from the final, normalized content.
+    if STOP_SEQUENCE in normalized_content:
+        normalized_content = normalized_content.split(STOP_SEQUENCE, 1)[0].strip()
+        
+    return normalized_content
 
 
 async def run_agent(
@@ -116,12 +125,12 @@ async def run_agent(
             temperature=temperature,
         )
 
-        llm_instance: BaseMessage
+        llm_instance = None
         if provider == "openai":
             from langchain_openai import ChatOpenAI
             if not settings.OPENAI_API_KEY:
                 raise ValueError(f"OpenAI API key not configured for agent {alias}")
-            llm_instance = ChatOpenAI(model=model, temperature=temperature, openai_api_key=settings.OPENAI_API_KEY)
+            llm_instance = ChatOpenAI(model=model, temperature=temperature, api_key=settings.OPENAI_API_KEY)
         elif provider == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
             if not settings.GEMINI_API_KEY:
@@ -134,7 +143,11 @@ async def run_agent(
             llm_instance = ChatAnthropic(model=model, temperature=temperature, anthropic_api_key=settings.CLAUDE_API_KEY)
         else:
             raise ValueError(f"Unknown or unsupported LLM provider: {provider} for agent {alias}")
+        
+        # Bind Stop Sequence
+        llm_instance = llm_instance.bind(stop=[STOP_SEQUENCE])
 
+        # --- Bind Tools ---
         allowed_tool_names = member_config.tools or []
         allowed_tools_resolved = [TOOL_REGISTRY[name] for name in allowed_tool_names if name in TOOL_REGISTRY]
         
@@ -161,8 +174,8 @@ async def run_agent(
         # Ensure we have an AIMessage to work with
         final_response_message = raw_llm_response if isinstance(raw_llm_response, AIMessage) else AIMessage(content=raw_llm_response.content)
 
-        # Robustly normalize the content
-        final_response_message.content = _normalize_llm_content(final_response_message.content)
+        # Robustly normalize and clean the content
+        final_response_message.content = _normalize_and_clean_llm_content(final_response_message.content)
 
         # Assign metadata
         final_response_message.name = alias
