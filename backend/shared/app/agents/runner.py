@@ -1,5 +1,6 @@
 import re
 import uuid
+from typing import List, Union, Dict
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 import structlog
@@ -11,42 +12,37 @@ from .tools import TOOL_REGISTRY
 
 logger = structlog.get_logger(__name__)
 
-MENTION_REGEX = r"@[\[]?([\w\s.-]+?)[\]]?"
 
-def _sanitize_agent_response(alias: str, content: str) -> str:
+def _normalize_llm_content(content: Union[str, List[Dict[str, any]]]) -> str:
     """
-    Sanitizes the response from a non-Orchestrator agent to prevent hallucination.
-    - Truncates at the first sign of a delegated action `@[...]`.
-    - Truncates at the first sign of `TASK_COMPLETE`.
+    Robustly normalizes LLM content. It handles:
+    - Simple string content.
+    - Multi-part content (common with vision models or Gemini), extracting and joining text parts.
     """
-    if alias == "Orchestrator":
+    if isinstance(content, str):
         return content
+    
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and "text" in part:
+                text_parts.append(str(part["text"]))
+        
+        if not text_parts:
+            logger.warn("run_agent.normalize_content.no_text_parts_found", content_received=content)
+            return "" # Return empty string if no text parts found
+            
+        normalized_content = "\n".join(text_parts)
+        if len(text_parts) > 1:
+            logger.info(
+                "run_agent.normalize_content.joined_multi_part_response",
+                parts_count=len(text_parts),
+                final_content_preview=normalized_content[:100]+"..."
+            )
+        return normalized_content
 
-    # Find the first occurrence of a mention or TASK_COMPLETE
-    mention_match = re.search(MENTION_REGEX, content)
-    task_complete_match = "TASK_COMPLETE" in content
-
-    truncate_at = len(content)
-    was_truncated = False
-
-    if mention_match:
-        truncate_at = min(truncate_at, mention_match.start())
-        was_truncated = True
-
-    if task_complete_match:
-        truncate_at = min(truncate_at, content.find("TASK_COMPLETE"))
-        was_truncated = True
-
-    if was_truncated:
-        logger.warn(
-            "run_agent.sanitized_hallucination",
-            agent_alias=alias,
-            original_content=content,
-            truncated_content=content[:truncate_at].strip(),
-        )
-        return content[:truncate_at].strip()
-
-    return content
+    logger.warn("run_agent.normalize_content.unhandled_content_type", content_type=type(content).__name__, content_preview=str(content)[:100]+"...")
+    return str(content)
 
 
 async def run_agent(
@@ -78,23 +74,22 @@ async def run_agent(
             config=member_config.model_dump(),
         )
 
-        # Determine the correct base prompt
-        base_prompt = (
-            ORCHESTRATOR_PROMPT
-            if alias == "Orchestrator"
-            else member_config.system_prompt
-        )
+        # --- Prompt Construction ---
+        available_team_members_str = ", ".join(
+            [f"@[{m.alias}]" for m in members if m.alias not in [alias, "Orchestrator", "User"]]
+        ) or "None"
 
-        available_team_members = [
-            f"@[{m.alias}]"
-            for m in members
-            if m.alias != alias and m.alias != "Orchestrator" and m.alias != "User"
-        ]
-        available_team_members_str = (
-            ", ".join(available_team_members) if available_team_members else "None"
-        )
-
-        system_prompt_content = f"{base_prompt}\n\nAvailable team members for delegation (excluding yourself, Orchestrator, User): {available_team_members_str}."
+        if alias == "Orchestrator":
+            system_prompt_content = ORCHESTRATOR_PROMPT.format(
+                available_team_members=available_team_members_str
+            )
+        else:
+            # Base prompt + tools + role-specific prompt
+            base_prompt_with_alias = AGENT_BASE_PROMPT.replace("`Your Alias`", f"`{alias}`").replace(
+                "{tool_list}",
+                "\n".join(f"- {tool.name}: {tool.description}" for tool in TOOL_REGISTRY.values())
+            ) # Adding this because for some reason LangGraph doesn't handle the list well # TODO: remove this when LangGraph is fixed
+            system_prompt_content = f"{base_prompt_with_alias}\n{member_config.system_prompt}"
 
         prompt_for_llm: list[BaseMessage] = [
             SystemMessage(content=system_prompt_content),
@@ -109,6 +104,7 @@ async def run_agent(
             total_messages_in_llm_prompt=len(prompt_for_llm),
         )
 
+        # --- LLM and Tool Configuration ---
         provider = getattr(member_config, "provider", "openai")
         model = getattr(member_config, "model", "gpt-4o")
         temperature = getattr(member_config, "temperature", 0.1)
@@ -120,153 +116,57 @@ async def run_agent(
             temperature=temperature,
         )
 
-        llm_instance: BaseMessage  # Placeholder for type hint
+        llm_instance: BaseMessage
         if provider == "openai":
             from langchain_openai import ChatOpenAI
-
             if not settings.OPENAI_API_KEY:
                 raise ValueError(f"OpenAI API key not configured for agent {alias}")
-            llm_instance = ChatOpenAI(
-                model=model, temperature=temperature, openai_api_key=settings.OPENAI_API_KEY
-            )
+            llm_instance = ChatOpenAI(model=model, temperature=temperature, openai_api_key=settings.OPENAI_API_KEY)
         elif provider == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
-
             if not settings.GEMINI_API_KEY:
                 raise ValueError(f"Gemini API key not configured for agent {alias}")
-            llm_instance = ChatGoogleGenerativeAI(
-                model=model,
-                temperature=temperature,
-                google_api_key=settings.GEMINI_API_KEY,
-            )
+            llm_instance = ChatGoogleGenerativeAI(model=model, temperature=temperature, google_api_key=settings.GEMINI_API_KEY)
         elif provider == "claude":
             from langchain_anthropic import ChatAnthropic
-
             if not settings.CLAUDE_API_KEY:
                 raise ValueError(f"Claude API key not configured for agent {alias}")
-            llm_instance = ChatAnthropic(
-                model=model,
-                temperature=temperature,
-                anthropic_api_key=settings.CLAUDE_API_KEY,
-            )
+            llm_instance = ChatAnthropic(model=model, temperature=temperature, anthropic_api_key=settings.CLAUDE_API_KEY)
         else:
-            logger.error(
-                "run_agent.unknown_provider", agent_alias=alias, provider_name=provider
-            )
-            raise ValueError(
-                f"Unknown or unsupported LLM provider: {provider} for agent {alias}"
-            )
+            raise ValueError(f"Unknown or unsupported LLM provider: {provider} for agent {alias}")
 
         allowed_tool_names = member_config.tools or []
-        allowed_tools_resolved = []
-        if allowed_tool_names:
-            for tool_name in allowed_tool_names:
-                tool_obj = TOOL_REGISTRY.get(tool_name)
-                if tool_obj:
-                    allowed_tools_resolved.append(tool_obj)
-                else:
-                    logger.warn(
-                        "run_agent.tool_not_found_in_registry",
-                        agent_alias=alias,
-                        tool_name=tool_name,
-                    )
+        allowed_tools_resolved = [TOOL_REGISTRY[name] for name in allowed_tool_names if name in TOOL_REGISTRY]
+        
+        if len(allowed_tool_names) != len(allowed_tools_resolved):
+            unresolved = set(allowed_tool_names) - set(t.name for t in allowed_tools_resolved)
+            logger.warn("run_agent.tools_not_found_in_registry", agent_alias=alias, unresolved_tools=list(unresolved))
 
-        logger.info(
-            "run_agent.tools_configuration",
-            agent_alias=alias,
-            requested_tools=allowed_tool_names,
-            resolved_tools_count=len(allowed_tools_resolved),
-            resolved_tool_names=[
-                t.name for t in allowed_tools_resolved if hasattr(t, "name")
-            ],
-        )
+        llm_with_tools = llm_instance.bind_tools(allowed_tools_resolved) if allowed_tools_resolved else llm_instance
 
-        llm_with_tools = (
-            llm_instance.bind_tools(allowed_tools_resolved)
-            if allowed_tools_resolved
-            else llm_instance
-        )
-
-        logger.info(
-            "run_agent.invoking_llm_with_tools",
-            agent_alias=alias,
-            has_tools_bound=bool(allowed_tools_resolved),
-        )
+        # --- LLM Invocation and Response Handling ---
+        logger.info("run_agent.invoking_llm", agent_alias=alias, has_tools_bound=bool(allowed_tools_resolved))
         raw_llm_response: BaseMessage = await llm_with_tools.ainvoke(prompt_for_llm)
 
-        raw_response_details = {
-            "type": type(raw_llm_response).__name__,
-            "content_preview": str(raw_llm_response.content)[:100] + "...",
-            "name_attr": getattr(raw_llm_response, "name", "N/A"),
-            "id_attr": getattr(raw_llm_response, "id", "N/A"),
-            "tool_calls_attr": getattr(raw_llm_response, "tool_calls", None),
-        }
         logger.debug(
             "run_agent.raw_llm_response_received",
             agent_alias=alias,
-            details=raw_response_details,
+            details={
+                "type": type(raw_llm_response).__name__,
+                "content_preview": str(raw_llm_response.content)[:150] + "...",
+                "tool_calls": getattr(raw_llm_response, "tool_calls", None),
+            },
         )
 
-        final_response_message: BaseMessage
-        if isinstance(raw_llm_response, AIMessage):
-            final_response_message = raw_llm_response
-        else:
-            logger.warn(
-                "run_agent.llm_response_not_aimessage",
-                agent_alias=alias,
-                actual_type=type(raw_llm_response).__name__,
-            )
-            final_response_message = AIMessage(
-                content=str(raw_llm_response.content),
-                tool_calls=getattr(raw_llm_response, "tool_calls", None),
-            )
+        # Ensure we have an AIMessage to work with
+        final_response_message = raw_llm_response if isinstance(raw_llm_response, AIMessage) else AIMessage(content=raw_llm_response.content)
 
-        # --- CONTENT NORMALIZATION & SANITIZATION ---
-        current_content = final_response_message.content
-        if isinstance(current_content, list):
-            if not current_content:
-                logger.warn("run_agent.llm_returned_empty_list_content", agent_alias=alias)
-                final_response_message.content = ""
-            else:
-                first_part = current_content[0]
-                if len(current_content) > 1:
-                    logger.warn(
-                        "run_agent.multi_part_response_detected",
-                        agent_alias=alias,
-                        parts_count=len(current_content),
-                        action="Taking first part, discarding others to prevent conversation hallucination.",
-                    )
-                if isinstance(first_part, dict) and "text" in first_part:
-                    final_response_message.content = str(first_part["text"])
-                else:
-                    final_response_message.content = str(first_part)
-        elif not isinstance(current_content, str):
-            final_response_message.content = str(current_content)
+        # Robustly normalize the content
+        final_response_message.content = _normalize_llm_content(final_response_message.content)
 
-        # Apply sanitization to prevent hallucinated delegations
-        final_response_message.content = _sanitize_agent_response(
-            alias, final_response_message.content
-        )
-        # --- END CONTENT NORMALIZATION & SANITIZATION ---
-
+        # Assign metadata
         final_response_message.name = alias
-
-        original_llm_id = getattr(final_response_message, "id", None)
-        new_app_id = str(uuid.uuid4())
-        final_response_message.id = new_app_id
-        if original_llm_id and original_llm_id != new_app_id:
-            logger.debug(
-                "run_agent.overwrote_llm_provided_id",
-                agent_alias=alias,
-                original_id=original_llm_id,
-                assigned_app_id=new_app_id,
-            )
-        else:
-            logger.debug(
-                "run_agent.assigned_app_id_to_final_response",
-                agent_alias=alias,
-                message_id=new_app_id,
-            )
+        final_response_message.id = str(uuid.uuid4())
 
         logger.info(
             "run_agent.success",
