@@ -144,16 +144,7 @@ async def router_node(state: GraphState, config: dict) -> dict:
     
     persistence_update = await _persist_new_messages(state)
     
-    # Create a temporary state that includes the updates from persistence,
-    # especially if route_logic might depend on last_saved_index.
-    # However, LangGraph merges returned dicts. If route_logic needs the *absolute latest* state
-    # *after* persistence for its own logic (which it currently doesn't seem to for last_saved_index),
-    # this would need a more complex flow or direct state mutation (which is bad).
-    # For now, route_logic uses the state as it entered the node.
-    # state_after_persistence = {**state, **persistence_update} # For logging or if needed
-    # logger.debug("router_node.state_after_persistence_for_routing", state_summary_after_persistence={"last_saved_index": state_after_persistence.get("last_saved_index")})
-
-    routing_update = route_logic(state) # Pass original state as route_logic primarily uses messages list
+    routing_update = route_logic(state)
     
     combined_update = {**persistence_update, **routing_update}
     logger.info(
@@ -166,9 +157,10 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
     configurable_config = config.get("configurable", {})
     arq_pool = configurable_config.get("arq_pool")
     thread_id = configurable_config.get("thread_id")
+    turn_id = state.get("turn_id") # Get turn_id from state
 
     logger.info(
-        "dispatcher_node.entry", turn_id=state.get("turn_id"), group_id=state.get("group_id"), thread_id=thread_id,
+        "dispatcher_node.entry", turn_id=turn_id, group_id=state.get("group_id"), thread_id=thread_id,
         next_actors_from_state=state.get("next_actors"),
         last_message_type=type(state["messages"][-1]).__name__ if state["messages"] else "N/A",
         last_message_sender=getattr(state["messages"][-1], "name", "N/A") if state["messages"] else "N/A",
@@ -181,7 +173,7 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
             "dispatcher_node.missing_config",
             arq_pool_present=bool(arq_pool),
             thread_id_present=bool(thread_id),
-            turn_id=state.get("turn_id"), group_id=state.get("group_id")
+            turn_id=turn_id, group_id=state.get("group_id")
         )
         raise ValueError("arq_pool or thread_id missing from runtime configuration for dispatcher_node.")
 
@@ -189,8 +181,16 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
     gathering_id = None
     dispatched_jobs_count = 0
 
+    # <<< START: FIX FOR turn_id PROPAGATION >>>
+    # Add turn_id to all messages in the current state before serializing.
+    # This ensures it's available in the worker context.
+    for msg in state["messages"]:
+        if "turn_id" not in msg.additional_kwargs:
+            msg.additional_kwargs["turn_id"] = turn_id
+    # <<< END: FIX FOR turn_id PROPAGATION >>>
+
     if tool_calls := getattr(last_message, "tool_calls", []):
-        logger.info("dispatcher_node.processing_tool_calls", tool_calls=tool_calls, group_id=state.get("group_id"), turn_id=state.get("turn_id"))
+        logger.info("dispatcher_node.processing_tool_calls", tool_calls=tool_calls, group_id=state.get("group_id"), turn_id=turn_id)
         for call_idx, call in enumerate(tool_calls):
             logger.info(
                 "dispatcher_node.dispatching_tool_call",
@@ -198,6 +198,7 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
                 tool_args=call["args"],
                 tool_call_id=call["id"],
                 thread_id=thread_id,
+                turn_id=turn_id,
                 call_index=call_idx,
                 total_tool_calls=len(tool_calls)
             )
@@ -213,12 +214,11 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
             dispatched_jobs_count += 1
     elif next_actors := state.get("next_actors"):
         if not next_actors:
-            logger.info("dispatcher_node.no_next_actors_to_dispatch", thread_id=thread_id, group_id=state.get("group_id"), turn_id=state.get("turn_id"))
+            logger.info("dispatcher_node.no_next_actors_to_dispatch", thread_id=thread_id, group_id=state.get("group_id"), turn_id=turn_id)
             return {}
 
-        logger.info("dispatcher_node.processing_next_actors", next_actors=next_actors, group_id=state.get("group_id"), turn_id=state.get("turn_id"))
+        logger.info("dispatcher_node.processing_next_actors", next_actors=next_actors, group_id=state.get("group_id"), turn_id=turn_id)
         
-        # Serialize messages and members once for all dispatches in this batch
         messages_dict = serialize_messages(state["messages"])
         group_members_dict = [gm.model_dump() for gm in state["group_members"]]
         logger.debug("dispatcher_node.serialized_data_for_dispatch", messages_count=len(messages_dict), members_count=len(group_members_dict))
@@ -226,23 +226,25 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
         if len(next_actors) > 1:
             gathering_id = str(uuid.uuid4())
             gather_hash_key = f"{GATHER_KEY_PREFIX}:{gathering_id}"
-            await arq_pool.hmset(gather_hash_key, {"expected": len(next_actors), "received": 0}) # Init received to 0
+            await arq_pool.hmset(gather_hash_key, {"expected": len(next_actors), "received": 0})
             await arq_pool.expire(gather_hash_key, GATHER_TIMEOUT_SECONDS)
             logger.info(
                 "dispatcher_node.setup_collector_for_parallel_dispatch",
                 gathering_id=gathering_id,
                 expected_count=len(next_actors),
                 thread_id=thread_id,
+                turn_id=turn_id,
                 gather_hash_key=gather_hash_key
             )
         else:
-            logger.info("dispatcher_node.single_actor_dispatch", actor=next_actors[0], thread_id=thread_id)
+            logger.info("dispatcher_node.single_actor_dispatch", actor=next_actors[0], thread_id=thread_id, turn_id=turn_id)
 
         for actor_idx, alias in enumerate(next_actors):
             logger.info(
                 "dispatcher_node.dispatching_agent_llm",
                 alias=alias,
                 thread_id=thread_id,
+                turn_id=turn_id,
                 gathering_id=gathering_id,
                 actor_index=actor_idx,
                 total_actors_to_dispatch=len(next_actors)
@@ -259,11 +261,11 @@ async def dispatcher_node(state: GraphState, config: dict) -> dict:
             dispatched_jobs_count += 1
     else:
         logger.info(
-            "dispatcher_node.no_tool_calls_and_no_next_actors_list", thread_id=thread_id, group_id=state.get("group_id"), turn_id=state.get("turn_id")
+            "dispatcher_node.no_tool_calls_and_no_next_actors_list", thread_id=thread_id, group_id=state.get("group_id"), turn_id=turn_id
         )
 
     logger.info(
-        "dispatcher_node.exit", turn_id=state.get("turn_id"), group_id=state.get("group_id"), thread_id=thread_id, dispatched_jobs_count=dispatched_jobs_count, final_gathering_id_used=gathering_id
+        "dispatcher_node.exit", turn_id=turn_id, group_id=state.get("group_id"), thread_id=thread_id, dispatched_jobs_count=dispatched_jobs_count, final_gathering_id_used=gathering_id
     )
     return {}
 

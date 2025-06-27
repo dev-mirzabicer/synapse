@@ -14,7 +14,7 @@ from shared.app.core.logging import setup_logging
 from shared.app.db import AsyncSessionLocal
 from shared.app.models.chat import GroupMember
 from shared.app.schemas.groups import GroupMemberRead
-from shared.app.utils.message_serde import deserialize_messages
+from shared.app.utils.message_serde import deserialize_messages, serialize_messages
 
 setup_logging()
 logger = structlog.get_logger(__name__)
@@ -56,6 +56,8 @@ async def start_turn(
     user_msg = HumanMessage(content=message_content)
     user_msg.id = message_id 
     user_msg.name = "User"
+    # Add turn_id to additional_kwargs for logging traceability in run_agent
+    user_msg.additional_kwargs["turn_id"] = turn_id
 
     graph_input = {
         "messages": [user_msg],
@@ -122,12 +124,10 @@ async def process_worker_result(
         "process_worker_result.collection_status_update",
         gathering_id=gathering_id, thread_id=thread_id,
         received_now=received_count, expected=expected_count,
+        sender_of_this_message=sender_alias_log,
     )
 
     if received_count >= expected_count:
-        # --- ATOMIC LOCKING MECHANISM TO PREVENT RACE CONDITION ---
-        # Try to set a "processing" lock. HSETNX returns 1 if the field is new, 0 otherwise.
-        # This ensures only the FIRST worker to reach this point will process the batch.
         lock_acquired = await arq_pool.hsetnx(gather_hash_key, "processing_lock", "1")
 
         if not lock_acquired:
@@ -138,7 +138,6 @@ async def process_worker_result(
                 action="Another worker is handling this batch. Backing off.",
             )
             return
-        # --- END ATOMIC LOCKING MECHANISM ---
 
         logger.info(
             "process_worker_result.collection_complete_and_lock_acquired",
@@ -163,6 +162,7 @@ async def process_worker_result(
 
 async def update_graph_with_messages(ctx, thread_id: str, messages_dict_list: list[dict]):
     sender_aliases_in_batch = [msg.get("kwargs", {}).get("name", "N/A") for msg in messages_dict_list]
+    turn_id_for_log = "N/A" # Attempt to find a turn_id for logging
 
     logger.info(
         "update_graph_with_messages.entry",
@@ -175,6 +175,11 @@ async def update_graph_with_messages(ctx, thread_id: str, messages_dict_list: li
 
     try:
         new_lc_messages: list[BaseMessage] = deserialize_messages(messages_dict_list)
+        # Find turn_id from the first available message for logging
+        for msg in new_lc_messages:
+            if msg.additional_kwargs.get("turn_id"):
+                turn_id_for_log = msg.additional_kwargs.get("turn_id")
+                break
     except Exception as e:
         logger.error(
             "update_graph_with_messages.deserialization_error",
@@ -182,7 +187,20 @@ async def update_graph_with_messages(ctx, thread_id: str, messages_dict_list: li
         )
         return
 
+    # Add turn_id to all messages if it's missing, to ensure it propagates
+    if turn_id_for_log != "N/A":
+        for msg in new_lc_messages:
+            if not msg.additional_kwargs.get("turn_id"):
+                msg.additional_kwargs["turn_id"] = turn_id_for_log
+
     input_payload_for_graph = {"messages": new_lc_messages}
+    
+    logger.debug(
+        "update_graph_with_messages.payload_for_graph",
+        thread_id=thread_id,
+        turn_id=turn_id_for_log,
+        payload_messages=serialize_messages(new_lc_messages)
+    )
 
     async with AsyncRedisSaver.from_conn_string(settings.REDIS_URL) as checkpointer:
         graph_app = workflow.compile(checkpointer=checkpointer)
@@ -192,10 +210,10 @@ async def update_graph_with_messages(ctx, thread_id: str, messages_dict_list: li
                 "arq_pool": arq_pool,
             }
         }
-        logger.info("update_graph_with_messages.invoking_graph_app.ainvoke_to_continue", thread_id=thread_id)
+        logger.info("update_graph_with_messages.invoking_graph_app.ainvoke_to_continue", thread_id=thread_id, turn_id=turn_id_for_log)
         await graph_app.ainvoke(input_payload_for_graph, config=invocation_config)
 
-    logger.info("update_graph_with_messages.graph_continue_invocation_complete", thread_id=thread_id)
+    logger.info("update_graph_with_messages.graph_continue_invocation_complete", thread_id=thread_id, turn_id=turn_id_for_log)
 
 
 class WorkerSettings:

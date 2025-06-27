@@ -1,5 +1,3 @@
-# /backend/shared/app/agents/prompts.py
-
 # Define a constant for the stop sequence to ensure consistency.
 STOP_SEQUENCE = "[MESSAGE_END]"
 
@@ -19,6 +17,8 @@ The turn will **not** end until you finish off your last message with TASK_COMPL
 **Crucially, you must end every single one of your messages with the exact sequence `{STOP_SEQUENCE}`. If you are also completing the task, use `TASK_COMPLETE` *before* the final `{STOP_SEQUENCE}`.**
 
 The list of team members: {{available_team_members}}
+
+After reviewing the conversation, determine the next step. Your response should be ONLY the delegation to the next agent(s) by mentioning them with @[Agent Name], or a final message to the user ending with TASK_COMPLETE. Do not simulate or predict other agents' responses.
 """
 
 AGENT_BASE_PROMPT = f"""\
